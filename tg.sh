@@ -1,24 +1,18 @@
 #!/usr/bin/env bash
 #
-# tg.sh - Telegram Server Management Bot (Ultimate V6 Edition)
-# Author: Hupan0210
-# Features:
-#   - HTML Parse Mode (Stable, no Bad Request errors)
-#   - Full User Management (Add/Mod/Del/List for VLESS & Socks5)
-#   - QR Code Generation (via qrencode)
-#   - Multi-Admin Support
-#   - System Monitoring & Tools (Speedtest, Backup)
+# tg.sh - Telegram Server Management Bot (V6 Final Verified)
+# Verified Fixes: HTML Escaping, QR Temp Files, Python Path
 #
 
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
-# --- Global Variables ---
+# --- Global Config ---
 CONFIG_ENV="/etc/nlbwvpn/config.env"
 BOT_SCRIPT="/usr/local/bin/nlbw_bot.py"
 SERVICE_NAME="nlbw-bot"
 
-# --- Color Helpers ---
+# --- Colors ---
 green(){ echo -e "\033[1;32m$1\033[0m"; }
 red(){ echo -e "\033[1;31m$1\033[0m"; }
 yellow(){ echo -e "\033[1;33m$1\033[0m"; }
@@ -29,10 +23,9 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
 fi
 
-green "🚀 启动 Telegram 管理机器人部署 (V6 Ultimate)..."
+green "🚀 启动 Telegram 机器人部署 (V6 Verified)..."
 
-# --- 1. Credentials Input ---
-# Only ask if not previously configured or if forced
+# --- 1. Input Credentials ---
 while true; do
     read -r -p "请输入 Telegram Bot Token: " BOT_TOKEN
     if [[ -n "$BOT_TOKEN" ]]; then break; fi; red "Token 不能为空"
@@ -43,14 +36,12 @@ while true; do
     if [[ -n "$CHAT_ID" ]]; then break; fi; red "Chat ID 不能为空"
 done
 
-# --- 2. Save Configuration ---
+# --- 2. Save Config ---
 mkdir -p /etc/nlbwvpn
-# Clean old entries
 if [[ -f "$CONFIG_ENV" ]]; then
     sed -i "/^BOT_TOKEN=/d" "$CONFIG_ENV"
     sed -i "/^CHAT_ID=/d" "$CONFIG_ENV"
 fi
-# Write new config
 cat >> "$CONFIG_ENV" <<EOF
 BOT_TOKEN="${BOT_TOKEN}"
 CHAT_ID="${CHAT_ID}"
@@ -58,28 +49,27 @@ XRAY_CONF="/usr/local/etc/xray/config.json"
 NGINX_SERVICE="nginx"
 XRAY_SERVICE="xray"
 EOF
-green "✅ 凭证已更新至 $CONFIG_ENV"
+green "✅ 凭证已保存。"
 
-# --- 3. Install System Dependencies ---
-green "📦 安装系统依赖 (qrencode, speedtest)..."
+# --- 3. Install Dependencies ---
+green "📦 安装依赖 (Python3, pip, qrencode, speedtest)..."
 apt-get update -y
 apt-get install -y python3 python3-pip jq qrencode speedtest-cli
 
-# --- 4. Install Python Dependencies ---
-green "⬇️ 安装 Python 库 (pyTelegramBotAPI, psutil)..."
-# Logic to handle PEP 668 (Debian 12 / Ubuntu 24.04)
+green "⬇️ 安装 Python 库..."
+# Handle PEP 668 (Debian 12+)
 if pip3 install pyTelegramBotAPI psutil --break-system-packages; then
-    green "✅ Python 依赖安装成功 (with break-system-packages)"
+    green "✅ Python 依赖安装成功"
 else
     yellow "⚠️ 尝试标准 pip 安装..."
     pip3 install pyTelegramBotAPI psutil
 fi
 
-# --- 5. Generate Python Bot Script (V6 Code) ---
-green "🧠 写入 V6 机器人核心代码..."
+# --- 4. Write Python Script ---
+green "🧠 写入机器人代码..."
 cat > "$BOT_SCRIPT" <<'EOF_BOT'
 # ==============================================================================
-# 🤖 nlbw_bot.py - V6 Final (HTML Mode + QR Codes + Full Management)
+# 🤖 nlbw_bot.py - V6 Verified
 # ==============================================================================
 import os
 import subprocess
@@ -111,6 +101,9 @@ BOT_TOKEN = config.get("BOT_TOKEN")
 SUPER_ADMIN_ID = config.get("CHAT_ID")
 
 if not BOT_TOKEN or not SUPER_ADMIN_ID: sys.exit(1)
+
+# Ensure qrencode exists
+subprocess.run("apt-get install -y qrencode", shell=True, check=False)
 
 bot = TeleBot(BOT_TOKEN, parse_mode='HTML')
 
@@ -162,15 +155,16 @@ def get_domain_and_path():
     return config.get("DOMAIN", "Unknown"), path
 
 def send_qr_code(chat_id, data, caption):
-    """Generates a QR code image and sends it via Telegram"""
+    """Generates a QR code image and sends it"""
     try:
-        png_path = "/tmp/bot_qr.png"
-        # Generate QR using qrencode CLI installed on system
+        # Use random filename to avoid conflicts
+        png_path = f"/tmp/qr_{uuid.uuid4()}.png"
         subprocess.run(['qrencode', '-o', png_path, '-s', '6', data], check=True)
         with open(png_path, 'rb') as photo:
             bot.send_photo(chat_id, photo, caption=caption)
+        os.remove(png_path)
     except Exception as e:
-        bot.send_message(chat_id, f"❌ 二维码生成失败 (请确认已安装 qrencode): {e}")
+        bot.send_message(chat_id, f"❌ 二维码生成失败: {e}")
 
 # --- Bot Handlers ---
 
@@ -183,7 +177,7 @@ def menu(m):
     mk.add(types.KeyboardButton('📊 状态'), types.KeyboardButton('👥 用户管理'),
            types.KeyboardButton('👮 管理员'), types.KeyboardButton('🛠️ 实用工具'),
            types.KeyboardButton('ℹ️ 获取所有链接'))
-    bot.send_message(m.chat.id, "🚀 <b>V6 终极面板 (全功能)</b>", reply_markup=mk)
+    bot.send_message(m.chat.id, "🚀 <b>V6 终极管理面板</b>", reply_markup=mk)
 
 # --- 1. STATUS ---
 @bot.message_handler(regexp='📊 状态')
@@ -231,7 +225,7 @@ def handle_all(c):
         elif c.data.startswith('manage_'): handle_manage_user(c)
         elif c.data.startswith('del_'): handle_del_user(c)
         elif c.data.startswith('mod_'): handle_mod_user(c)
-        elif c.data.startswith('qr_'): handle_get_qr(c) # New QR Handler
+        elif c.data.startswith('qr_'): handle_get_qr(c)
         elif c.data.startswith('adm_'): handle_admin(c)
         elif c.data.startswith('tool_'): handle_tools(c)
     except Exception as e:
@@ -258,8 +252,7 @@ def add_vless_step(m):
         execute_command(f'systemctl restart {XRAY_SERVICE}')
         dom, path = get_domain_and_path()
         link = f"vless://{new_id}@{dom}:443?encryption=none&security=tls&type=ws&host={dom}&path={path}#{remark}"
-        bot.send_message(m.chat.id, f"✅ <b>VLESS 添加成功</b>\n\n<code>{link}</code>")
-        # Auto send QR
+        bot.send_message(m.chat.id, f"✅ <b>VLESS 添加成功</b>\n\n<code>{html.escape(link)}</code>")
         send_qr_code(m.chat.id, link, f"QR: {remark}")
     except Exception as e: bot.send_message(m.chat.id, f"❌ 失败: {e}")
 
@@ -274,7 +267,7 @@ def add_socks_step(m):
         execute_command(f'systemctl restart {XRAY_SERVICE}')
         dom, _ = get_domain_and_path()
         link = f"socks5://{u}:{p}@{dom}:{port}#{u}"
-        bot.send_message(m.chat.id, f"✅ <b>Socks5 添加成功</b>\n\n<code>{link}</code>")
+        bot.send_message(m.chat.id, f"✅ <b>Socks5 添加成功</b>\n\n<code>{html.escape(link)}</code>")
         send_qr_code(m.chat.id, link, f"QR: {u}")
     except: bot.send_message(m.chat.id, "❌ 格式错误 (使用空格分隔)")
 
@@ -302,14 +295,13 @@ def handle_manage_user(c):
     else:
         mk.add(types.InlineKeyboardButton("✏️ 修改密码", callback_data=f"mod_socks_{ident}"))
     
-    # QR Code Button
     mk.add(types.InlineKeyboardButton("📷 获取二维码 / 链接", callback_data=f"qr_{mode}_{ident}"))
     mk.add(types.InlineKeyboardButton("❌ 删除用户", callback_data=f"del_{mode}_{ident}"))
     mk.add(types.InlineKeyboardButton("🔙 返回", callback_data=f"list_{mode}"))
     
     bot.edit_message_text(f"⚙️ <b>管理用户:</b> <code>{ident}</code>", c.message.chat.id, c.message.message_id, reply_markup=mk)
 
-# ... QR & Link Fetcher (Single User) ...
+# ... QR Handler ...
 def handle_get_qr(c):
     parts = c.data.split('_', 2)
     mode = parts[1]; ident = parts[2]
@@ -325,8 +317,7 @@ def handle_get_qr(c):
         if target:
             link = f"vless://{ident}@{dom}:443?encryption=none&security=tls&type=ws&host={dom}&path={path}#{target['email']}"
             caption = f"👤 <b>VLESS:</b> {target['email']}"
-            
-    else: # socks
+    else:
         accs = next(i for i in data['inbounds'] if i['protocol']=='socks')['settings']['accounts']
         target = next((x for x in accs if x['user'] == ident), None)
         if target:
@@ -335,7 +326,7 @@ def handle_get_qr(c):
             caption = f"👤 <b>Socks5:</b> {target['user']}"
             
     if link:
-        bot.send_message(c.message.chat.id, f"{caption}\n<code>{link}</code>", parse_mode='HTML')
+        bot.send_message(c.message.chat.id, f"{caption}\n<code>{html.escape(link)}</code>", parse_mode='HTML')
         send_qr_code(c.message.chat.id, link, "📷 扫码导入")
         bot.answer_callback_query(c.id)
     else:
@@ -361,7 +352,7 @@ def do_mod_vless(m, uuid_target):
             if c['id'] == uuid_target: c['email'] = new_remark
         save_xray_config(data)
         execute_command(f'systemctl restart {XRAY_SERVICE}')
-        bot.send_message(m.chat.id, f"✅ 备注更新: {new_remark}")
+        bot.send_message(m.chat.id, f"✅ 备注更新: {html.escape(new_remark)}")
     except: pass
 
 def do_mod_socks(m, user_target):
@@ -373,7 +364,7 @@ def do_mod_socks(m, user_target):
             if a['user'] == user_target: a['pass'] = new_pass
         save_xray_config(data)
         execute_command(f'systemctl restart {XRAY_SERVICE}')
-        bot.send_message(m.chat.id, f"✅ 密码更新: {new_pass}")
+        bot.send_message(m.chat.id, f"✅ 密码更新: {html.escape(new_pass)}")
     except: pass
 
 def handle_del_user(c):
@@ -407,10 +398,7 @@ def get_all_links(m):
         dom, path = get_domain_and_path()
         data = get_xray_config()
         
-        # VLESS Users
         v_clients = next(i for i in data['inbounds'] if i['protocol']=='vless')['settings']['clients']
-        
-        # Socks Users
         s_in = next(i for i in data['inbounds'] if i['protocol']=='socks')
         s_accs = s_in['settings']['accounts']
         s_port = s_in['port']
@@ -424,18 +412,17 @@ def get_all_links(m):
             if i == 0: remark += " (Admin)"
             link = f"vless://{cl['id']}@{dom}:443?encryption=none&security=tls&type=ws&host={dom}&path={path}#{remark}"
             if i == 0: admin_v_link = link
-            msg += f"👤 <b>{remark}</b>:\n<code>{link}</code>\n\n"
+            msg += f"👤 <b>{html.escape(remark)}</b>:\n<code>{html.escape(link)}</code>\n\n"
             
         msg += "🟡 <b>=== Socks5 ===</b>\n"
         for i, ac in enumerate(s_accs):
             u = ac['user']; p = ac['pass']
             tag = " (Admin)" if i == 0 else ""
             link = f"socks5://{u}:{p}@{dom}:{s_port}#{u}{tag}"
-            msg += f"👤 <b>{u}{tag}</b>:\n<code>{link}</code>\n\n"
+            msg += f"👤 <b>{html.escape(u)}{tag}</b>:\n<code>{html.escape(link)}</code>\n\n"
             
         bot.send_message(m.chat.id, msg)
         
-        # Send Admin QR as default convenience
         if admin_v_link:
             send_qr_code(m.chat.id, admin_v_link, "📷 主管理员 VLESS 二维码")
             
@@ -491,7 +478,7 @@ def handle_tools(c):
     if 'speedtest' in c.data:
         bot.send_message(c.message.chat.id, "⏳ 正在测速...")
         ok, res = execute_command("speedtest-cli --simple")
-        bot.send_message(c.message.chat.id, f"⚡ <b>测速结果:</b>\n<pre>{res}</pre>")
+        bot.send_message(c.message.chat.id, f"⚡ <b>测速结果:</b>\n<pre>{html.escape(res)}</pre>")
     elif 'backup' in c.data:
         if os.path.exists(XRAY_CONF):
             bot.send_document(c.message.chat.id, open(XRAY_CONF, 'rb'), caption="📜 Xray Config")
@@ -501,10 +488,10 @@ if __name__ == '__main__':
     bot.polling(none_stop=True)
 EOF_BOT
 chmod +x "$BOT_SCRIPT"
-green "✅ 机器人核心代码已生成。"
+green "✅ 机器人代码生成完毕。"
 
-# --- 6. Create & Start Systemd Service ---
-green "🛠️ 配置系统服务 (Systemd)..."
+# --- 5. Restart Service ---
+green "🛠️ 重启服务..."
 cat > /etc/systemd/system/${SERVICE_NAME}.service <<EOF_SVC
 [Unit]
 Description=nlbw VPN Management Bot
@@ -521,11 +508,10 @@ WorkingDirectory=/root
 WantedBy=multi-user.target
 EOF_SVC
 
-# Enable and Start
 systemctl daemon-reload
 systemctl enable ${SERVICE_NAME}.service
 systemctl restart ${SERVICE_NAME}.service
 
 echo ""
-green "🎉 部署完成! 您的 V6 终极版机器人已上线。"
-echo "请在 Telegram 发送 /start 或 /menu 开始使用。"
+green "🎉 部署全部完成！已启用 HTML 模式和二维码功能。"
+echo "请在 Telegram 中发送 /menu 体验最终版本。"
