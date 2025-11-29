@@ -168,6 +168,5 @@ systemctl restart xray
 
 ---
 
-## ⚖️ License
-
-MIT License — 欢迎 Fork / PR / Issue。
+⚖️ License
+本项目基于 MIT License 开源。欢迎 Fork、提交 PR 或开 Issue。
