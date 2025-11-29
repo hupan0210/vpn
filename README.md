@@ -157,7 +157,7 @@ systemctl restart xray
 * **Python**：3.x（脚本自动处理依赖）
 * **权限**：Root
 * **依赖**：curl、jq、openssl、qrencode（自动安装）
-
+> 想要 Web 图形化管理？👉 [查看 Web 超级面板部署文档 (PANEL.md)](PANEL.md)
 ---
 
 ## 🧑‍💻 作者
