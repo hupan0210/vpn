@@ -9,6 +9,7 @@
 # 2. Randomized WebSocket path for security.
 # 3. Optional Telegram notifications & monitoring.
 # 4. Auto-renewal of SSL certificates.
+# 5. Added Socks5 inbound with authentication.
 
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
@@ -71,12 +72,19 @@ RAND_PATH=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 6)
 WS_PATH="/${RAND_PATH}"
 UUID="$(cat /proc/sys/kernel/random/uuid)"
 
+# 1.5 Socks5 Configuration (New)
+# Generate random port (20000-50000) and credentials
+SOCKS_PORT=$(shuf -i 20000-50000 -n 1)
+SOCKS_USER="u$(head /dev/urandom | tr -dc a-z0-9 | head -c 6)"
+SOCKS_PASS=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 12)
+
 echo ""
 green "📝 配置确认:"
 echo "------------------------------------------------"
 echo "域名: $DOMAIN"
 echo "邮箱: $EMAIL"
 echo "路径: $WS_PATH (随机生成)"
+echo "Socks5端口: $SOCKS_PORT (随机生成)"
 echo "Telegram: $(if $TG_ENABLE; then echo "✅ 启用"; else echo "❌ 禁用"; fi)"
 echo "------------------------------------------------"
 echo ""
@@ -166,7 +174,7 @@ fi
 # ==========================================
 green "🔧 写入最终配置..."
 
-# 6.1 Xray Config
+# 6.1 Xray Config (Added Socks5 Inbound)
 cat > /usr/local/etc/xray/config.json <<EOF
 {
   "log": {
@@ -193,6 +201,20 @@ cat > /usr/local/etc/xray/config.json <<EOF
         "wsSettings": {
           "path": "${WS_PATH}"
         }
+      }
+    },
+    {
+      "port": ${SOCKS_PORT},
+      "protocol": "socks",
+      "settings": {
+        "auth": "password",
+        "accounts": [
+          {
+            "user": "${SOCKS_USER}",
+            "pass": "${SOCKS_PASS}"
+          }
+        ],
+        "udp": true
       }
     }
   ],
@@ -276,13 +298,16 @@ fi
 # Generate VLESS Link
 VLESS_LINK="vless://${UUID}@${DOMAIN}:443?encryption=none&security=tls&type=ws&host=${DOMAIN}&path=${WS_PATH}#${DOMAIN}"
 
+# Generate Socks5 Link
+SOCKS_LINK="socks5://${SOCKS_USER}:${SOCKS_PASS}@${DOMAIN}:${SOCKS_PORT}#${DOMAIN}-socks"
+
 # Generate QR Code
 qrencode -o /root/vless-qrcode.png "$VLESS_LINK"
 
 green "✅ 部署完成!"
 echo ""
 echo "------------------------------------------------------------------"
-echo " VLESS 配置信息"
+echo " VLESS 配置信息 (推荐)"
 echo "------------------------------------------------------------------"
 echo "地址 (Address): ${DOMAIN}"
 echo "端口 (Port):    443"
@@ -292,8 +317,20 @@ echo "路径 (Path):    ${WS_PATH}"
 echo "安全 (TLS):     tls"
 echo "------------------------------------------------------------------"
 echo ""
+echo "------------------------------------------------------------------"
+echo " Socks5 配置信息 (备用)"
+echo "------------------------------------------------------------------"
+echo "地址 (Address): ${DOMAIN}"
+echo "端口 (Port):    ${SOCKS_PORT}"
+echo "用户 (User):    ${SOCKS_USER}"
+echo "密码 (Pass):    ${SOCKS_PASS}"
+echo "------------------------------------------------------------------"
+echo ""
 echo "VLESS 链接:"
 green "$VLESS_LINK"
+echo ""
+echo "Socks5 链接:"
+green "$SOCKS_LINK"
 echo ""
 
 # Only execute Telegram logic if enabled
@@ -308,7 +345,12 @@ if $TG_ENABLE; then
     ESCAPED_PATH=$(echo "$WS_PATH" | sed 's/[.!]/\\&/g')
     ESCAPED_LINK=$(echo "$VLESS_LINK" | sed 's/[][_*`~()<>#+=\-|{}.!]/\\&/g')
     
-    TEXT="✅ *Deployment Successful*\n\nDomain: \`${ESCAPED_DOMAIN}\`\nPath: \`${ESCAPED_PATH}\`\n\n*Link (Click to Copy):*\n\`${ESCAPED_LINK}\`"
+    # Socks5 Escape
+    ESCAPED_SOCKS_LINK=$(echo "$SOCKS_LINK" | sed 's/[][_*`~()<>#+=\-|{}.!]/\\&/g')
+    ESCAPED_S_USER=$(echo "$SOCKS_USER" | sed 's/[.!]/\\&/g')
+    ESCAPED_S_PASS=$(echo "$SOCKS_PASS" | sed 's/[.!]/\\&/g')
+    
+    TEXT="✅ *Deployment Successful*\n\n*Server Info:*\nDomain: \`${ESCAPED_DOMAIN}\`\nPath: \`${ESCAPED_PATH}\`\n\n*VLESS Link:*\n\`${ESCAPED_LINK}\`\n\n*Socks5 Info:*\nPort: \`${SOCKS_PORT}\`\nUser: \`${ESCAPED_S_USER}\`\nPass: \`${ESCAPED_S_PASS}\`\nLink: \`${ESCAPED_SOCKS_LINK}\`"
     
     curl -s -X POST "${API_URL}/sendMessage" -d chat_id="${CHAT_ID}" -d parse_mode="MarkdownV2" -d text="$TEXT" >/dev/null
     
