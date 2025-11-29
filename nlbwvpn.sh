@@ -1,284 +1,376 @@
 #!/usr/bin/env bash
-# nlbwvpn — 一键部署 (final) + 自动通过 Telegram 发送 VLESS 链接与二维码
-# Author: nlbw
+#
+# nlbwvpn - Automated VLESS-WS-TLS Deployment Script
+# GitHub Repository: https://github.com/Hupan0210/vpn
+# License: MIT
+#
+# Features:
+# 1. Non-invasive Nginx configuration (Domain specific).
+# 2. Randomized WebSocket path for security.
+# 3. Optional Telegram notifications & monitoring.
+# 4. Auto-renewal of SSL certificates.
+
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
-exec > >(tee -a /root/deploy.log) 2>&1
 
-# 彩色输出
-say(){ echo -e "\033[1;32m$1\033[0m"; }
+# Log file
+LOG_FILE="/root/deploy.log"
+exec > >(tee -a "$LOG_FILE") 2>&1
 
-say "🚀 nlbwvpn Ultimate — 一键部署（交互式）"
+# Color helpers
+green(){ echo -e "\033[1;32m$1\033[0m"; }
+yellow(){ echo -e "\033[1;33m$1\033[0m"; }
+red(){ echo -e "\033[1;31m$1\033[0m"; }
 
-# 交互输入
-read -r -p "域名 (例 090110.xyz): " DOMAIN
-[ -z "$DOMAIN" ] && { echo "域名不能为空"; exit 1; }
-read -r -p "证书邮箱 (例 admin@gmail.com): " EMAIL
-[ -z "$EMAIL" ] && { echo "邮箱不能为空"; exit 1; }
-read -r -p "Telegram Bot Token (格式: 123:ABC...): " BOT_TOKEN
-[ -z "$BOT_TOKEN" ] && { echo "Bot Token 不能为空"; exit 1; }
-read -r -p "Telegram Chat ID (数字): " CHAT_ID
-[ -z "$CHAT_ID" ] && { echo "Chat ID 不能为空"; exit 1; }
-read -r -p "健康检测间隔秒 (默认300): " INTERVAL
-CHECK_INTERVAL=${INTERVAL:-300}
-
-UUID="$(cat /proc/sys/kernel/random/uuid)"
-WS_PATH="/ws"
-
-say "开始部署：DOMAIN=${DOMAIN}, UUID=${UUID}"
-
-# 1) 系统依赖
-say "安装系统依赖..."
-apt update -y
-apt install -y curl jq bc nginx certbot python3-certbot-nginx unzip openssl qrencode git || true
-
-# 2) 安装 Xray（官方安装脚本）
-if ! command -v xray >/dev/null 2>&1; then
-  say "安装 Xray..."
-  bash <(curl -Ls https://raw.githubusercontent.com/XTLS/Xray-install/main/install-release.sh)
+# Check Root
+if [[ $EUID -ne 0 ]]; then
+   red "❌ Error: This script must be run as root."
+   exit 1
 fi
 
-# 3) 伪装站点
-say "配置伪装站点..."
-mkdir -p /var/www/${DOMAIN}/html
-cat > /var/www/${DOMAIN}/html/index.html <<HTML
-<!doctype html><meta charset=utf-8><title>nlbwvpn</title>
-<h1 style="text-align:center">Welcome to nlbwvpn 🚀</h1>
-<p style="text-align:center">VLESS + WS + TLS 已部署成功。</p>
-HTML
-chmod -R 755 /var/www/${DOMAIN}/html
+green "🚀 Starting Deployment..."
 
-# 4) 临时 nginx 配置（用于 certbot webroot）
-NG_CONF="/etc/nginx/sites-available/${DOMAIN}.conf"
-ln -sf "$NG_CONF" "/etc/nginx/sites-enabled/${DOMAIN}.conf"
-cat > "$NG_CONF" <<NG
+# ==========================================
+# 1. Configuration & Interaction
+# ==========================================
+
+# 1.1 Domain
+while true; do
+    read -r -p "请输入您的域名 (例如 vpn.example.com): " DOMAIN
+    if [[ -n "$DOMAIN" ]]; then break; fi
+    red "域名不能为空"
+done
+
+# 1.2 Email (for Certbot)
+while true; do
+    read -r -p "请输入用于申请证书的邮箱 (例如 admin@example.com): " EMAIL
+    if [[ -n "$EMAIL" ]]; then break; fi
+    red "邮箱不能为空"
+done
+
+# 1.3 Telegram (Optional)
+yellow "🤖 是否配置 Telegram 机器人进行监控和通知? [y/N]"
+read -r TG_CHOICE
+TG_ENABLE=false
+BOT_TOKEN=""
+CHAT_ID=""
+
+if [[ "$TG_CHOICE" =~ ^[Yy]$ ]]; then
+    read -r -p "Telegram Bot Token: " BOT_TOKEN
+    read -r -p "Telegram Chat ID: " CHAT_ID
+    if [[ -n "$BOT_TOKEN" && -n "$CHAT_ID" ]]; then
+        TG_ENABLE=true
+    else
+        yellow "⚠️ Token 或 Chat ID 为空，已跳过 Telegram 配置。"
+    fi
+fi
+
+# 1.4 Random Path Generation
+# Generate a random 6-character alphanumeric string for the WebSocket path
+RAND_PATH=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 6)
+WS_PATH="/${RAND_PATH}"
+UUID="$(cat /proc/sys/kernel/random/uuid)"
+
+echo ""
+green "📝 配置确认:"
+echo "------------------------------------------------"
+echo "域名: $DOMAIN"
+echo "邮箱: $EMAIL"
+echo "路径: $WS_PATH (随机生成)"
+echo "Telegram: $(if $TG_ENABLE; then echo "✅ 启用"; else echo "❌ 禁用"; fi)"
+echo "------------------------------------------------"
+echo ""
+
+# ==========================================
+# 2. System Preparation
+# ==========================================
+green "📦 安装系统依赖..."
+apt-get update -y
+apt-get install -y curl jq bc nginx certbot python3-certbot-nginx unzip openssl qrencode git socat
+
+# ==========================================
+# 3. Install Xray (Official Script)
+# ==========================================
+if ! command -v xray &> /dev/null; then
+    green "⬇️ 安装 Xray..."
+    bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
+else
+    green "✅ Xray 已安装，跳过."
+fi
+
+# ==========================================
+# 4. Web Server & Camouflage (Non-invasive)
+# ==========================================
+green "🌐 配置 Nginx..."
+
+WEB_ROOT="/var/www/${DOMAIN}/html"
+NGINX_CONF="/etc/nginx/sites-available/${DOMAIN}.conf"
+
+# Create web root if not exists
+mkdir -p "$WEB_ROOT"
+
+# Check if index.html exists. If NOT, create a dummy one.
+# This respects existing content if the user uploaded their own site.
+if [[ ! -f "$WEB_ROOT/index.html" ]]; then
+    cat > "$WEB_ROOT/index.html" <<EOF
+<!DOCTYPE html>
+<html>
+<head><title>Welcome to nginx!</title><style>body{width:35em;margin:0 auto;font-family:Tahoma,Verdana,Arial,sans-serif;}</style></head>
+<body><h1>Welcome to nginx!</h1><p>If you see this page, the nginx web server is successfully installed and working.</p></body>
+</html>
+EOF
+fi
+
+# Set permissions
+chown -R www-data:www-data "/var/www/${DOMAIN}"
+chmod -R 755 "/var/www/${DOMAIN}"
+
+# Initial Nginx Config (HTTP only for Certbot)
+cat > "$NGINX_CONF" <<EOF
 server {
     listen 80;
     server_name ${DOMAIN};
-    root /var/www/${DOMAIN}/html;
-    location / { try_files \$uri \$uri/ =404; }
-    location /.well-known/acme-challenge/ { root /var/www/${DOMAIN}/html; }
+    root ${WEB_ROOT};
+    index index.html;
+    
+    location / {
+        try_files \$uri \$uri/ =404;
+    }
 }
-NG
-nginx -t && systemctl restart nginx
-
-# 5) 申请证书（webroot，避免修改 nginx 配置）
-say "申请 Let's Encrypt 证书..."
-certbot certonly --webroot -w /var/www/${DOMAIN}/html -d "${DOMAIN}" --email "${EMAIL}" --agree-tos --noninteractive || { echo "Certbot 失败，请确认 DNS A 记录已指向本 VPS"; exit 1; }
-systemctl enable certbot.timer || true
-systemctl start certbot.timer || true
-
-# 6) 写 Xray 配置 (VLESS + WS)
-say "写入 Xray 配置..."
-mkdir -p /usr/local/etc/xray
-cat > /usr/local/etc/xray/config.json <<JSON
-{
-  "log": { "loglevel": "warning" },
-  "inbounds": [{
-    "port": 10000,
-    "listen": "127.0.0.1",
-    "protocol": "vless",
-    "settings": { "clients": [{ "id": "${UUID}" }], "decryption": "none" },
-    "streamSettings": { "network": "ws", "wsSettings": { "path": "${WS_PATH}" } }
-  }],
-  "outbounds": [{ "protocol": "freedom" }]
-}
-JSON
-
-# Ensure xray auto-restart on crash
-mkdir -p /etc/systemd/system/xray.service.d
-cat > /etc/systemd/system/xray.service.d/restart.conf <<EOF
-[Service]
-Restart=always
-RestartSec=3
 EOF
 
-systemctl daemon-reload || true
-systemctl enable --now xray || true
-systemctl restart xray || true
+# Enable Site
+ln -sf "$NGINX_CONF" "/etc/nginx/sites-enabled/${DOMAIN}.conf"
 
-# 7) 最终 nginx (80->443, 443 -> ws proxy)
-say "写入最终 nginx 配置..."
-cat > "$NG_CONF" <<NG
+# Restart Nginx to load config
+systemctl restart nginx
+
+# ==========================================
+# 5. SSL Certificate (Certbot)
+# ==========================================
+green "🔒 申请 SSL 证书..."
+
+# Stop Nginx briefly to prevent port conflict issues if standalone mode was needed (though we use webroot/nginx plugin usually)
+# Here we use --nginx plugin which is robust
+if certbot --nginx -d "$DOMAIN" --email "$EMAIL" --agree-tos --non-interactive --redirect; then
+    green "✅ 证书申请成功"
+else
+    red "❌ 证书申请失败. 请检查 DNS 解析是否正确."
+    # Fallback attempt using webroot
+    yellow "⚠️ 尝试使用 webroot 模式重试..."
+    certbot certonly --webroot -w "$WEB_ROOT" -d "$DOMAIN" --email "$EMAIL" --agree-tos --non-interactive || { red "❌ 最终失败"; exit 1; }
+fi
+
+# ==========================================
+# 6. Final Configuration (Nginx + Xray)
+# ==========================================
+green "🔧 写入最终配置..."
+
+# 6.1 Xray Config
+cat > /usr/local/etc/xray/config.json <<EOF
+{
+  "log": {
+    "loglevel": "warning",
+    "access": "/var/log/xray/access.log",
+    "error": "/var/log/xray/error.log"
+  },
+  "inbounds": [
+    {
+      "port": 10000,
+      "listen": "127.0.0.1",
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "${UUID}",
+            "level": 0
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "ws",
+        "wsSettings": {
+          "path": "${WS_PATH}"
+        }
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "freedom"
+    }
+  ]
+}
+EOF
+
+# Ensure log dir exists
+mkdir -p /var/log/xray
+chown -R nobody:nogroup /var/log/xray
+
+# Restart Xray
+systemctl restart xray
+
+# 6.2 Final Nginx Config (Reverse Proxy)
+# We overwrite the config generated by Certbot to ensure the /ws path is proxy_passed correctly
+cat > "$NGINX_CONF" <<EOF
 server {
     listen 80;
     server_name ${DOMAIN};
-    location /.well-known/acme-challenge/ { root /var/www/${DOMAIN}/html; }
-    location / { return 301 https://\$host\$request_uri; }
+    return 301 https://\$host\$request_uri;
 }
+
 server {
     listen 443 ssl http2;
     server_name ${DOMAIN};
+
     ssl_certificate /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers HIGH:!aNULL:!MD5;
 
+    root ${WEB_ROOT};
+    index index.html;
+
+    # Normal web traffic
     location / {
-        root /var/www/${DOMAIN}/html;
-        index index.html;
         try_files \$uri \$uri/ =404;
     }
 
+    # Proxy WebSocket to Xray
     location ${WS_PATH} {
+        if (\$http_upgrade != "websocket") {
+            return 404;
+        }
         proxy_redirect off;
-        proxy_buffering off;
         proxy_pass http://127.0.0.1:10000;
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_set_header Host \$host;
+        # Show real IP in Xray logs
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
     }
 }
-NG
-nginx -t && systemctl restart nginx
-
-# 8) BBR 打开
-say "启用 BBR..."
-grep -q "net.ipv4.tcp_congestion_control" /etc/sysctl.conf || cat >> /etc/sysctl.conf <<'EOF'
-net.core.default_qdisc=fq
-net.ipv4.tcp_congestion_control=bbr
-net.ipv4.tcp_fastopen=3
 EOF
-sysctl -p || true
 
-# 9) bbr-status.sh
-say "写入 bbr-status.sh..."
-cat > /usr/local/bin/bbr-status.sh <<'BBR'
-#!/bin/bash
-set -euo pipefail
-LOG="/var/log/bbr-check.log"
-DATE=$(date '+%F %T')
-CC=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo unknown)
-SPEED_BPS=$(curl -s "https://speed.cloudflare.com/__down?bytes=5000000" -o /dev/null -w '%{speed_download}' 2>/dev/null || echo 0)
-MBPS=$(awk "BEGIN{printf \"%.2f\", ($SPEED_BPS*8)/1000000}")
-echo "[$DATE] BBR=${CC} SPEED=${MBPS}Mbps (${SPEED_BPS} B/s)" | tee -a "$LOG"
-# auto truncate if > 5MB
-find /var/log -name "bbr-check.log" -size +5M -exec truncate -s 0 {} \; 2>/dev/null || true
-BBR
-chmod +x /usr/local/bin/bbr-status.sh
+systemctl restart nginx
 
-cat > /etc/systemd/system/bbr-status.service <<'SVCB'
-[Unit]
-Description=BBR status check
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/bbr-status.sh
-SVCB
-cat > /etc/systemd/system/bbr-status.timer <<'TM1'
-[Unit]
-Description=Run bbr-status weekly
-[Timer]
-OnCalendar=Mon *-*-* 03:00:00
-Persistent=true
-[Install]
-WantedBy=timers.target
-TM1
-systemctl daemon-reload
-systemctl enable --now bbr-status.timer
-
-# 10) bbr-weekly-report.sh (friendly, MarkdownV2)
-say "写入 bbr-weekly-report.sh..."
-cat > /usr/local/bin/bbr-weekly-report.sh <<'WEEK'
-#!/bin/bash
-set -euo pipefail
-LOG="/var/log/bbr-check.log"
-API="https://api.telegram.org/bot${BOT_TOKEN}"
-CHAT_ID="${CHAT_ID}"
-EXPIRY_DATE="2026-11-10"
-if [ ! -f "$LOG" ]; then
-  curl -s "${API}/sendMessage" -d chat_id="${CHAT_ID}" -d parse_mode="MarkdownV2" -d text="📊 每周BBR报告：暂无数据" >/dev/null
-  exit 0
+# ==========================================
+# 7. BBR Optimization
+# ==========================================
+green "🚀 优化网络 (BBR)..."
+if ! grep -q "net.ipv4.tcp_congestion_control = bbr" /etc/sysctl.conf; then
+    cat >> /etc/sysctl.conf <<EOF
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+EOF
+    sysctl -p
 fi
-AVG=$(awk -F' ' '/SPEED/ {sum+=substr($3,7); count++} END{ if(count>0) printf "%.2f", sum/count; else print "0" }' "$LOG")
-MSG="📊 *每周BBR报告*\n主机: $(hostname)\n平均速度: ${AVG} Mbps\n\n到期提醒: ${EXPIRY_DATE}"
-curl -s "${API}/sendMessage" -d chat_id="${CHAT_ID}" -d parse_mode="MarkdownV2" -d text="$MSG" >/dev/null || true
-WEEK
-chmod +x /usr/local/bin/bbr-weekly-report.sh
 
-cat > /etc/systemd/system/bbr-weekly-report.service <<'SVCW'
-[Unit]
-Description=Weekly BBR report service
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/bbr-weekly-report.sh
-SVCW
-cat > /etc/systemd/system/bbr-weekly-report.timer <<'TMRW'
-[Unit]
-Description=Weekly BBR report timer
-[Timer]
-OnCalendar=Mon *-*-* 03:10:00
-Persistent=true
-[Install]
-WantedBy=timers.target
-TMRW
-systemctl daemon-reload
-systemctl enable --now bbr-weekly-report.timer
+# ==========================================
+# 8. Output Generation & Telegram (Optional)
+# ==========================================
 
-# 11) tg-control minimal (health + friendly)
-say "写入 tg-control.sh..."
-cat > /usr/local/bin/tg-control.sh <<'TG'
-#!/usr/bin/env bash
-set -euo pipefail
+# Generate VLESS Link
+VLESS_LINK="vless://${UUID}@${DOMAIN}:443?encryption=none&security=tls&type=ws&host=${DOMAIN}&path=${WS_PATH}#${DOMAIN}"
+
+# Generate QR Code
+qrencode -o /root/vless-qrcode.png "$VLESS_LINK"
+
+green "✅ 部署完成!"
+echo ""
+echo "------------------------------------------------------------------"
+echo " VLESS 配置信息"
+echo "------------------------------------------------------------------"
+echo "地址 (Address): ${DOMAIN}"
+echo "端口 (Port):    443"
+echo "用户ID (UUID):  ${UUID}"
+echo "传输 (Network): ws"
+echo "路径 (Path):    ${WS_PATH}"
+echo "安全 (TLS):     tls"
+echo "------------------------------------------------------------------"
+echo ""
+echo "VLESS 链接:"
+green "$VLESS_LINK"
+echo ""
+
+# Only execute Telegram logic if enabled
+if $TG_ENABLE; then
+    green "🤖 正在发送 Telegram 通知..."
+    
+    API_URL="https://api.telegram.org/bot${BOT_TOKEN}"
+    
+    # 1. Send Text Message (MarkdownV2)
+    # Escape special characters for MarkdownV2: _ * [ ] ( ) ~ ` > # + - = | { } . !
+    ESCAPED_DOMAIN=$(echo "$DOMAIN" | sed 's/[.!]/\\&/g')
+    ESCAPED_PATH=$(echo "$WS_PATH" | sed 's/[.!]/\\&/g')
+    ESCAPED_LINK=$(echo "$VLESS_LINK" | sed 's/[][_*`~()<>#+=\-|{}.!]/\\&/g')
+    
+    TEXT="✅ *Deployment Successful*\n\nDomain: \`${ESCAPED_DOMAIN}\`\nPath: \`${ESCAPED_PATH}\`\n\n*Link (Click to Copy):*\n\`${ESCAPED_LINK}\`"
+    
+    curl -s -X POST "${API_URL}/sendMessage" -d chat_id="${CHAT_ID}" -d parse_mode="MarkdownV2" -d text="$TEXT" >/dev/null
+    
+    # 2. Send QR Code
+    if [[ -f /root/vless-qrcode.png ]]; then
+        curl -s -F chat_id="${CHAT_ID}" -F document=@"/root/vless-qrcode.png" -F caption="Scan to Import" "${API_URL}/sendDocument" >/dev/null
+    fi
+    
+    # 3. Setup Weekly Report Service (Optional)
+    green "⏱️ 设置每周报告定时任务..."
+    
+    # Create monitoring script
+    cat > /usr/local/bin/vpn-monitor.sh <<EOF_MON
+#!/bin/bash
+DOMAIN="${DOMAIN}"
 BOT_TOKEN="${BOT_TOKEN}"
 CHAT_ID="${CHAT_ID}"
-API="https://api.telegram.org/bot${BOT_TOKEN}"
-CHECK_INTERVAL=${CHECK_INTERVAL}
+API_URL="https://api.telegram.org/bot\${BOT_TOKEN}"
 
-send_msg() {
-  txt="$1"
-  # escape for MarkdownV2
-  esc=$(echo "$txt" | sed 's/[][_*`~()<>#+=\-|{}.!]/\\&/g')
-  curl -s "${API}/sendMessage" -d chat_id="${CHAT_ID}" -d parse_mode="MarkdownV2" -d text="$esc" >/dev/null || true
-}
-
-while true; do
-  for svc in xray nginx; do
-    if ! systemctl is-active "$svc" >/dev/null; then
-      send_msg "⚠️ 服务 ${svc} 异常! 主机: $(hostname)"
-    fi
-  done
-  sleep $CHECK_INTERVAL
-done
-TG
-sed -i "s|\${BOT_TOKEN}|${BOT_TOKEN}|g" /usr/local/bin/tg-control.sh
-sed -i "s|\${CHAT_ID}|${CHAT_ID}|g" /usr/local/bin/tg-control.sh
-sed -i "s|\${CHECK_INTERVAL}|${CHECK_INTERVAL}|g" /usr/local/bin/tg-control.sh
-chmod +x /usr/local/bin/tg-control.sh
-cat > /etc/systemd/system/tg-control.service <<'SRV'
-[Unit]
-Description=Telegram health monitor
-After=network.target
-[Service]
-ExecStart=/usr/local/bin/tg-control.sh
-Restart=always
-RestartSec=10
-LimitNOFILE=65535
-[Install]
-WantedBy=multi-user.target
-SRV
-systemctl daemon-reload && systemctl enable --now tg-control.service
-
-# 12) 生成 VLESS 链接与二维码，并用 Bot 发送到 Chat
-say "生成 VLESS 链接与二维码..."
-VLESS="vless://${UUID}@${DOMAIN}:443?encryption=none&security=tls&type=ws&host=${DOMAIN}&path=$(python3 -c 'import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1]))' "${WS_PATH}")#${DOMAIN}-ws"
-echo "VLESS 链接: $VLESS"
-qrencode -o /root/vless-qrcode.png "$VLESS" || true
-
-# 发送文本和文件给 Telegram（两次重试机制）
-say "把 VLESS 链接和二维码发到 Telegram 私聊..."
-TELE_API="https://api.telegram.org/bot${BOT_TOKEN}"
-# 发送文本（MarkdownV2）
-TEXT_MSG="🎉 部署完成！\nVLESS 链接:\n\`${VLESS}\`"
-curl -s -m 10 "${TELE_API}/sendMessage" -d chat_id="${CHAT_ID}" -d parse_mode="MarkdownV2" -d text="$TEXT_MSG" || true
-# 发送二维码文件（如果存在）
-if [ -f /root/vless-qrcode.png ]; then
-  curl -s -F chat_id="${CHAT_ID}" -F caption="二维码（扫码导入）" -F document=@/root/vless-qrcode.png "${TELE_API}/sendDocument" >/dev/null 2>&1 || true
+# Check Cert Expiry
+CERT_FILE="/etc/letsencrypt/live/\${DOMAIN}/fullchain.pem"
+if [[ -f "\$CERT_FILE" ]]; then
+    EXPIRY=\$(openssl x509 -enddate -noout -in "\$CERT_FILE" | cut -d= -f2)
+else
+    EXPIRY="Unknown"
 fi
 
-say "部署与通知完成。登录 Telegram 查看消息（私聊）"
-say "证书到期: $(openssl x509 -enddate -noout -in /etc/letsencrypt/live/${DOMAIN}/fullchain.pem | cut -d= -f2 || true)"
-say "二维码路径: /root/vless-qrcode.png"
-say "部署日志: /root/deploy.log"
+# Check Server Load
+LOAD=\$(uptime | awk -F'load average:' '{ print \$2 }')
+
+MSG="📊 *Weekly Report*\nHost: \$(hostname)\nDomain: \${DOMAIN}\nLoad: \${LOAD}\nSSL Expiry: \${EXPIRY}"
+# Simple escape
+ESC_MSG=\$(echo "\$MSG" | sed 's/[.!]/\\\\&/g')
+
+curl -s -X POST "\${API_URL}/sendMessage" -d chat_id="\${CHAT_ID}" -d parse_mode="MarkdownV2" -d text="\$ESC_MSG"
+EOF_MON
+
+    chmod +x /usr/local/bin/vpn-monitor.sh
+
+    # Systemd Timer
+    cat > /etc/systemd/system/vpn-monitor.service <<EOF_SVC
+[Unit]
+Description=VPN Weekly Report
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/vpn-monitor.sh
+EOF_SVC
+
+    cat > /etc/systemd/system/vpn-monitor.timer <<EOF_TMR
+[Unit]
+Description=Timer for VPN Weekly Report
+[Timer]
+OnCalendar=Mon 09:00:00
+Persistent=true
+[Install]
+WantedBy=timers.target
+EOF_TMR
+
+    systemctl daemon-reload
+    systemctl enable --now vpn-monitor.timer
+else
+    yellow "Telegram通知未启用，跳过相关服务配置。"
+fi
+
+green "🎉 全部完成! 如果您启用了Telegram，请检查消息。"
