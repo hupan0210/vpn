@@ -1,21 +1,24 @@
 <p align="center">
-  <a href="https://raw.githubusercontent.com/Hupan0210/vpn/main/install.sh" target="_blank">
+  <a href="https://raw.githubusercontent.com/Hupan0210/vpn/main/nlbwvpn.sh" target="_blank">
     <img src="https://img.shields.io/badge/🟢%20一键安装-nlbwvpn-success?style=for-the-badge&logo=gnubash&logoColor=white" alt="一键安装 nlbwvpn">
   </a>
 </p>
 
-<h1 align="center">🚀 nlbwvpn — 一键部署 VLESS + WS + TLS + Telegram</h1>
+<h1 align="center">🚀 nlbwvpn — 极致轻量化 VLESS + Socks5 + Telegram 全能面板</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Author-nlbw-blueviolet?style=for-the-badge">
-  <img src="https://img.shields.io/badge/Built%20With-Bash-green?style=for-the-badge&logo=gnu-bash">
+  <img src="https://img.shields.io/badge/Author-Hupan0210-blueviolet?style=for-the-badge">
+  <img src="https://img.shields.io/badge/Built%20With-Bash%20%7C%20Python-green?style=for-the-badge&logo=python">
   <img src="https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge">
   <img src="https://img.shields.io/badge/Platform-Debian%20%7C%20Ubuntu-orange?style=for-the-badge&logo=linux">
 </p>
 
 <p align="center">
   <a href="https://raw.githubusercontent.com/Hupan0210/vpn/main/nlbwvpn.sh">
-    <img src="https://img.shields.io/badge/💾%20立即安装-nlbwvpn.sh-red?style=for-the-badge">
+    <img src="https://img.shields.io/badge/💾%20核心部署-nlbwvpn.sh-red?style=for-the-badge">
+  </a>
+  <a href="https://raw.githubusercontent.com/Hupan0210/vpn/main/tg.sh">
+    <img src="https://img.shields.io/badge/🤖%20机器人部署-tg.sh-blue?style=for-the-badge">
   </a>
 </p>
 
@@ -23,24 +26,28 @@
 
 ## ✨ 项目简介
 
-**`nlbwvpn`** 是一个全自动化的 VPN 部署脚本，专为个人 VPS 打造。  
-支持 **VLESS + WebSocket + TLS**，并通过 Telegram 自动发送配置链接与二维码。  
-一键安装，无需手动配置 Xray / Nginx / Certbot / BBR。
+**`nlbwvpn`** 是一套专为小内存 VPS 打造的极致性价比 VPN 解决方案。
+项目包含两个核心模块：底层 VPN 服务部署脚本与高级 Telegram 管理机器人。
+支持 **VLESS (WS+TLS)** 与 **Socks5** 双协议共存，提供全生命周期的用户管理、二维码分享与服务器状态监控。
 
 ---
 
 ## 🧠 功能亮点
 
-- ✅ 自动安装 Xray (VLESS + WS + TLS)  
-- ✅ 自动申请 Let’s Encrypt 证书（Certbot）  
-- ✅ 自动配置 Nginx 伪装站点与反向代理  
-- ✅ 自动启用 BBR TCP 加速  
-- ✅ 自动生成 VLESS 链接与二维码（`/root/vless-qrcode.png`）  
-- ✅ 自动推送到 Telegram（文本 + 二维码）  
-- ✅ 健康检测与 Telegram 告警（systemd 服务）  
-- ✅ 每周 Telegram 周报（BBR 速率 / 证书到期提醒）  
-- ✅ 支持一键卸载（`uninstall` 参数）  
-- ✅ 随机化或自定义 WebSocket 路径
+### 🌐 核心服务 (Core)
+- ✅ **双协议共存**：VLESS (主协议, 抗干扰) + Socks5 (备用, TG 专用)
+- ✅ **自动 HTTPS**：集成 Certbot 自动申请与续签 Let’s Encrypt 证书
+- ✅ **隐蔽伪装**：自动配置 Nginx 反向代理，非代理流量回落至伪装页
+- ✅ **性能优化**：自动开启 BBR 加速，小内存机器也能跑满带宽
+- ✅ **安全加固**：随机生成 WebSocket 路径与端口，防止主动探测
+
+### 🤖 管理面板 (Bot V6 Ultimate)
+- ✅ **交互式管理**：全 HTML 模式面板，彻底解决特殊字符报错问题
+- ✅ **多用户管理**：一键新增/删除/修改 VLESS 与 Socks5 用户
+- ✅ **二维码分享**：直接生成并发送二维码图片，扫码即连
+- ✅ **多管理员协作**：支持授权多个 Telegram 账号共同管理服务器
+- ✅ **实用工具箱**：集成 Speedtest 网络测速与配置备份导出
+- ✅ **详细监控**：实时查看 CPU、内存、磁盘、流量消耗与服务状态
 
 ---
 
@@ -48,120 +55,70 @@
 
 **注意**：在执行前，请先把你的域名的 A 记录指向 VPS 公网 IP 并等待 DNS 生效。
 
-### 一键安装（推荐）
-在任何支持 `bash` 的终端以 root 身份运行：
+### 第一步：部署核心服务
+在终端以 root 身份运行，安装 Xray 与 Nginx：
 
 ```bash
 # 切换到 root 用户（必要）
 sudo -i
 
-# 执行一键安装（interactive）
-bash <(curl -Ls https://raw.githubusercontent.com/Hupan0210/vpn/main/install.sh)
-```
+# 执行核心安装脚本
+bash <(curl -Ls [https://raw.githubusercontent.com/Hupan0210/vpn/main/nlbwvpn.sh](https://raw.githubusercontent.com/Hupan0210/vpn/main/nlbwvpn.sh))
 
-脚本会以交互方式询问以下内容：
-- 域名（例如：`vpn.example.com`）
-- 证书邮箱（例如：`admin@example.com`）
-- Telegram Bot Token（从 @BotFather 获取）
-- Telegram Chat ID（纯数字，使用 @userinfobot 可查询）
-- 健康检测间隔（秒，默认 300）
+脚本会交互式询问域名、邮箱等信息。
 
----
+第二步：部署管理机器人
+核心服务安装完成后，运行此脚本部署 Python 管理面板：
 
-### 卸载
-若想卸载（删除 systemd 服务、配置与生成文件），请运行：
+# 执行机器人安装脚本 (V6 Ultimate)
+bash <(curl -Ls [https://raw.githubusercontent.com/Hupan0210/vpn/main/tg.sh](https://raw.githubusercontent.com/Hupan0210/vpn/main/tg.sh))
 
-```bash
-sudo -i
-bash <(curl -Ls https://raw.githubusercontent.com/Hupan0210/vpn/main/nlbwvpn.sh) uninstall
-```
+脚本会自动安装 Python 环境、依赖库 (Debian 12 兼容) 并注册系统服务。需提供 Bot Token 和 Chat ID。
+📦 部署产物（Key Artifacts）
+文件/路径描述/usr/local/bin/nlbw_bot.py机器人核心 Python 逻辑 (V6)/etc/nlbwvpn/config.env机器人环境配置文件 (Token/ID)/etc/nlbwvpn/admins.json多管理员权限数据库/usr/local/etc/xray/config.jsonXray 核心配置文件/etc/nginx/sites-available/[DOMAIN].confNginx 站点配置/root/vless-qrcode.png初始管理员二维码图片
+📊 自动化系统（Systemd Services）服务名称描述触发机制nlbw-bot.serviceTelegram 管理机器人开机自启，常驻后台监听指令nlbw-monitor.timer健康检测每 5 分钟检测 Xray/Nginx 存活状态nlbw-weekly.timer周报推送每周一发送运行周报与证书状态
 
-> 卸载命令由脚本内 `uninstall` 分支处理，请确保使用相同仓库和脚本版本以匹配路径与服务名。
+🤖 机器人操作指南
+安装完成后，向机器人发送 /menu 即可唤出控制面板：
 
----
+📊 状态：查看详细的服务器资源占用与流量统计。
 
-## 📦 部署产物（部署完成后你将得到）
+👥 用户管理：
 
-- VLESS 配置文本（Telegram 私聊）  
-- 二维码文件：`/root/vless-qrcode.png`  
-- 部署日志：`/root/deploy.log`  
-- Xray 配置：`/usr/local/etc/xray/config.json`  
-- Nginx 配置：`/etc/nginx/sites-available/[DOMAIN].conf`  
-- BBR 测速日志：`/var/log/bbr-check.log`  
-- 核心脚本配置：`/etc/nlbwvpn/config.conf`
+新增：一键生成 VLESS/Socks5 朋友账号。
 
-示例（脚本发送的示例输出）：
+管理：修改备注/密码，删除用户，获取独立二维码。
 
-```
-🎉 部署完成！ (by nlbw)
-主机: debian-vps
+👮 管理员：添加或移除协助管理的 Telegram 账号。
 
-VLESS 链接:
-vless://[UUID]@[DOMAIN]:443?encryption=none&security=tls&type=ws&host=[DOMAIN]&path=%2F[RANDOM_PATH]#[DOMAIN]-nlbw
-```
+ℹ️ 获取链接：列出当前所有可用节点的链接（包含二维码）。
 
----
+🛠️ 实用工具：运行测速或下载备份。
 
-## 📊 自动化系统（systemd / timers）
+💡 常见问题（FAQ）
+Q1：如何新增给朋友使用的账号？ A：在机器人面板点击 👥 用户管理 -> ➕ 新增 VLESS/Socks5，按提示输入备注或密码即可。
 
-| 功能 | Systemd 名称 | 触发周期 / 描述 |
-|------|--------------|-----------------|
-| 实时健康检测 | `tg-control.service` | 常驻服务，按 `CHECK_INTERVAL` 秒检测 nginx/xray 状态并通过 Telegram 报警 |
-| BBR 状态检查 | `bbr-status.timer` / `.service` | 每周运行一次，记录 BBR & 测速日志 |
-| Telegram 周报 | `bbr-weekly-report.timer` / `.service` | 每周一 03:10 发送 BBR 平均速率与证书到期提醒 |
+Q2：机器人点击按钮没反应？ A：V6 版本已切换至 HTML 模式并增加了交互反馈。如果仍无反应，请检查 VPS 网络是否能连接 Telegram API。
 
----
+Q3：如何修改 WebSocket 路径或主端口？ A：建议使用 nlbwvpn.sh 重新覆盖安装，或手动修改 /usr/local/etc/xray/config.json 后重启服务。
 
-## 🗂️ 关键路径（Key Paths）
+Q4：Certbot 申请失败？ A：请务必确认域名已解析到当前 IP，且 80/443 端口未被防火墙阻断。
 
-- `/root/deploy.log` —— 部署日志  
-- `/root/vless-qrcode.png` —— 二维码文件  
-- `/usr/local/etc/xray/config.json` —— Xray 配置  
-- `/etc/nginx/sites-available/[DOMAIN].conf` —— Nginx 配置  
-- `/etc/nlbwvpn/config.conf` —— 用户安装参数  
-- `/var/log/bbr-check.log` —— BBR/测速日志
+🧰 系统兼容性（Requirements）
+OS: Debian 10/11/12, Ubuntu 20.04/22.04/24.04
 
----
+Python: 3.x (脚本自动处理依赖与 PEP 668 限制)
 
-## 💡 常见问题（FAQ）
+Permissions: Root 权限
 
-**Q1：Certbot 申请失败？**  
-A：最常见原因是域名未解析或解析未生效。确认域名 A 记录正确指向 VPS，并等待 DNS 缓存刷新。
+Dependencies: curl, jq, openssl, qrencode (自动安装)
 
-**Q2：Telegram 没收到消息？**  
-A：确认 Bot Token 与 Chat ID 无误，并且你已主动在 Telegram 上向 Bot 发送 `/start` 激活会话。
+🧑‍💻 作者与支持
+作者：Hupan0210
 
-**Q3：脚本可重复运行吗？**  
-A：可以。脚本设计为幂等，可重复运行（适用于修改配置或更新证书）。
+Email：hupan0210@gmail.com
 
-**Q4：如何修改 WebSocket 路径或端口？**  
-A：重运行脚本并输入新路径；脚本会同步修改 Xray 与 Nginx 配置。
+项目地址：https://github.com/Hupan0210/vpn
 
-**Q5：如何查看部署日志？**  
-A：`sudo tail -n 200 /root/deploy.log`
-
----
-
-## 🧰 系统兼容性（Requirements）
-
-- Debian 10/11/12  
-- Ubuntu 20.04/22.04/24.04  
-- Root 权限  
-- 已解析的域名  
-- 可访问 GitHub / Let’s Encrypt / Telegram
-
----
-
-## 🧑‍💻 作者与支持
-
-- 作者：**nlbw**  
-- Email：`hupan0210@gmail.com`  
-- 项目地址：<https://github.com/Hupan0210/vpn>
-
----
-
-## ⚖️ License
-
-本项目基于 [MIT License](https://opensource.org/licenses/MIT) 开源。欢迎 Fork、提交 PR 或开 Issue。
-
----
+⚖️ License
+本项目基于 MIT License 开源。欢迎 Fork、提交 PR 或开 Issue。
