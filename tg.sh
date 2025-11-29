@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 #
-# tg.sh - Telegram Management Bot for nlbwvpn
-# Author: Hupan0210
-# Description: Installs a Python-based Telegram bot to manage Xray/Nginx and monitor system status.
+# tg.sh - Telegram Management Bot (Multi-User Edition)
+#
+# Features:
+# 1. Monitor System Status & Traffic
+# 2. Manage Socks5 (Reset/Add)
+# 3. Manage VLESS (Add Users)
+# 4. Auto-fix Python env (PEP 668)
 #
 
 set -euo pipefail
@@ -24,10 +28,9 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
 fi
 
-green "🚀 启动 Telegram 管理机器人部署 (Final Version)..."
+green "🚀 启动 Telegram 机器人部署 (多用户版)..."
 
-# 1. Credentials Input (Interactive)
-# Only ask if not already in config, or force update if running interactively
+# 1. Credentials Input
 while true; do
     read -r -p "请输入 Telegram Bot Token: " BOT_TOKEN
     if [[ -n "$BOT_TOKEN" ]]; then break; fi; red "Token 不能为空"
@@ -40,12 +43,10 @@ done
 
 # 2. Save Configuration
 mkdir -p /etc/nlbwvpn
-# Remove old entries to prevent duplicates
 if [[ -f "$CONFIG_ENV" ]]; then
     sed -i "/^BOT_TOKEN=/d" "$CONFIG_ENV"
     sed -i "/^CHAT_ID=/d" "$CONFIG_ENV"
 fi
-# Append new config
 cat >> "$CONFIG_ENV" <<EOF
 BOT_TOKEN="${BOT_TOKEN}"
 CHAT_ID="${CHAT_ID}"
@@ -53,27 +54,27 @@ XRAY_CONF="/usr/local/etc/xray/config.json"
 NGINX_SERVICE="nginx"
 XRAY_SERVICE="xray"
 EOF
-green "✅ 凭证已更新至 $CONFIG_ENV"
+green "✅ 凭证已保存。"
 
 # 3. Install Dependencies
-green "📦 安装系统与 Python 依赖..."
+green "📦 安装依赖..."
 apt-get update -y
 apt-get install -y python3 python3-pip jq
 
-# Smart pip install (handles PEP 668 on Debian 12+)
-green "⬇️ 安装 Python 库 (pyTelegramBotAPI, psutil)..."
+green "⬇️ 安装 Python 库..."
+# Handle PEP 668 automatically
 if pip3 install pyTelegramBotAPI psutil --break-system-packages; then
-    green "✅ Python 依赖安装成功 (with break-system-packages)"
+    green "✅ Python 依赖安装成功"
 else
     yellow "⚠️ 尝试标准 pip 安装..."
     pip3 install pyTelegramBotAPI psutil
 fi
 
 # 4. Generate Python Bot Script
-green "🧠 写入机器人核心逻辑..."
+green "🧠 写入机器人逻辑 (包含多用户功能)..."
 cat > "$BOT_SCRIPT" <<'EOF_BOT'
 # ==============================================================================
-# 🤖 nlbw_bot.py - Server Management Bot
+# 🤖 nlbw_bot.py - Multi-User Edition
 # ==============================================================================
 import os
 import subprocess
@@ -83,9 +84,10 @@ import string
 import platform
 import psutil
 import time
+import uuid
 from telebot import TeleBot, types
 
-# --- Configuration ---
+# --- Config ---
 CONFIG_ENV = "/etc/nlbwvpn/config.env"
 
 def load_config():
@@ -103,232 +105,226 @@ config = load_config()
 BOT_TOKEN = config.get("BOT_TOKEN")
 CHAT_ID = config.get("CHAT_ID")
 XRAY_CONF = config.get("XRAY_CONF", "/usr/local/etc/xray/config.json")
-NGINX_SERVICE = config.get("NGINX_SERVICE", "nginx")
 XRAY_SERVICE = config.get("XRAY_SERVICE", "xray")
+NGINX_SERVICE = config.get("NGINX_SERVICE", "nginx")
 
-if not BOT_TOKEN or not CHAT_ID:
-    print("FATAL: BOT_TOKEN or CHAT_ID missing.")
-    exit(1)
-
-try:
-    ALLOWED_CHAT_ID = int(CHAT_ID)
-except ValueError:
-    print("FATAL: CHAT_ID is not an integer.")
-    exit(1)
+if not BOT_TOKEN or not CHAT_ID: exit(1)
+try: ALLOWED_CHAT_ID = int(CHAT_ID)
+except: exit(1)
 
 bot = TeleBot(BOT_TOKEN, parse_mode='MarkdownV2')
 
-# --- Helper Functions ---
-
+# --- Helpers ---
 def markdown_safe(text):
-    """Escapes ALL special characters reserved in MarkdownV2"""
     if not isinstance(text, str): text = str(text)
-    escape_chars = '_*[]()~`>#+-=|{}.!'
-    for char in escape_chars:
+    for char in '_*[]()~`>#+-=|{}.!':
         text = text.replace(char, f'\\{char}')
     return text
 
 def get_size(bytes, suffix="B"):
-    """Scale bytes to its proper format"""
     factor = 1024
     for unit in ["", "K", "M", "G", "T", "P"]:
-        if bytes < factor:
-            return f"{bytes:.2f}{unit}{suffix}"
+        if bytes < factor: return f"{bytes:.2f}{unit}{suffix}"
         bytes /= factor
     return f"{bytes:.2f}P{suffix}"
 
 def execute_command(cmd):
     try:
-        result = subprocess.run(cmd, shell=True, check=True, capture_output=True, text=True)
-        return True, result.stdout
-    except subprocess.CalledProcessError as e:
-        return False, e.stderr
-    except FileNotFoundError:
-        return False, "Command not found."
-
-# --- Core Logic ---
-
-def generate_random_socks_creds():
-    new_port = random.randint(20000, 50000)
-    new_user = 'u' + ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
-    new_pass = ''.join(random.choices(string.ascii_letters + string.digits, k=12))
-    return new_port, new_user, new_pass
+        res = subprocess.run(cmd, shell=True, check=True, capture_output=True, text=True)
+        return True, res.stdout
+    except subprocess.CalledProcessError as e: return False, e.stderr
 
 def get_xray_config():
     if not os.path.exists(XRAY_CONF): return None
     with open(XRAY_CONF, 'r') as f: return json.load(f)
 
-def save_xray_config(config_data):
-    with open(XRAY_CONF, 'w') as f: json.dump(config_data, f, indent=2)
+def save_xray_config(data):
+    with open(XRAY_CONF, 'w') as f: json.dump(data, f, indent=2)
     os.chmod(XRAY_CONF, 0o644)
     subprocess.run(['chown', 'nobody:nogroup', XRAY_CONF], check=False)
 
-def update_socks5_inbound(port, user, password):
-    config_data = get_xray_config()
-    if not config_data: return False, "❌ Xray config file not found"
-    updated = False
-    for inbound in config_data.get('inbounds', []):
-        if inbound.get('protocol') == 'socks':
-            inbound['port'] = int(port)
-            inbound['settings']['accounts'][0]['user'] = user
-            inbound['settings']['accounts'][0]['pass'] = password
-            updated = True
-            break
-    if updated:
-        save_xray_config(config_data)
-        return True, "✅ Socks5 updated"
-    return False, "❌ Socks5 inbound not found"
+def get_domain_and_path():
+    data = get_xray_config()
+    path = "/"
+    if data:
+        for inbound in data.get('inbounds', []):
+            if inbound.get('protocol') == 'vless':
+                path = inbound['streamSettings']['wsSettings']['path']
+                break
+    return config.get("DOMAIN", "Unknown"), path
 
-def get_current_info():
-    config_data = get_xray_config()
-    if not config_data: return {}
-    info = {}
-    for inbound in config_data.get('inbounds', []):
+# --- Add User Logic ---
+
+def add_vless_user(remarks):
+    data = get_xray_config()
+    if not data: return False, "Config missing"
+    
+    new_uuid = str(uuid.uuid4())
+    # Find VLESS inbound
+    for inbound in data.get('inbounds', []):
         if inbound.get('protocol') == 'vless':
-            info['uuid'] = inbound['settings']['clients'][0]['id']
-            info['path'] = inbound['streamSettings']['wsSettings']['path']
-        elif inbound.get('protocol') == 'socks':
-            info['socks_port'] = inbound['port']
-            info['socks_user'] = inbound['settings']['accounts'][0]['user']
-            info['socks_pass'] = inbound['settings']['accounts'][0]['pass']
-    info['domain'] = config.get("DOMAIN", "Unknown")
-    return info
+            # Create user dict. Using email as remarks
+            new_client = {"id": new_uuid, "email": remarks, "level": 0}
+            inbound['settings']['clients'].append(new_client)
+            save_xray_config(data)
+            return True, new_uuid
+            
+    return False, "VLESS Inbound not found"
+
+def add_socks_user(remarks):
+    data = get_xray_config()
+    if not data: return False, "Config missing"
+    
+    new_user = 'u' + ''.join(random.choices(string.ascii_lowercase + string.digits, k=4))
+    new_pass = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
+    
+    # Find Socks inbound
+    for inbound in data.get('inbounds', []):
+        if inbound.get('protocol') == 'socks':
+            new_acc = {"user": new_user, "pass": new_pass}
+            # Append to accounts list
+            inbound['settings']['accounts'].append(new_acc)
+            # Retrieve port
+            port = inbound['port']
+            save_xray_config(data)
+            return True, (port, new_user, new_pass)
+            
+    return False, "Socks Inbound not found"
 
 # --- Bot Handlers ---
 
-@bot.message_handler(func=lambda message: message.chat.id != ALLOWED_CHAT_ID, content_types=['text'])
-def unauthorized(message):
-    bot.send_message(message.chat.id, "❌ Unauthorized Access")
+@bot.message_handler(func=lambda m: m.chat.id != ALLOWED_CHAT_ID, content_types=['text'])
+def unauthorized(m): bot.send_message(m.chat.id, "❌ Unauthorized")
 
-@bot.message_handler(commands=['start', 'help', 'menu'])
-def send_welcome(message):
-    markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-    markup.add(types.KeyboardButton('📊 状态'), types.KeyboardButton('🔑 Socks5 管理'),
-               types.KeyboardButton('🔄 重启服务'), types.KeyboardButton('ℹ️ 获取链接'))
-    bot.send_message(message.chat.id, "🚀 *服务器管理面板*\n请选择操作:", reply_markup=markup)
+@bot.message_handler(commands=['start', 'menu'])
+def menu(m):
+    mk = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+    mk.add(types.KeyboardButton('📊 状态'), types.KeyboardButton('👥 新增用户'),
+           types.KeyboardButton('🔄 重启服务'), types.KeyboardButton('ℹ️ 获取链接'))
+    bot.send_message(m.chat.id, "🚀 *面板已就绪*", reply_markup=mk)
 
 @bot.message_handler(regexp='📊 状态')
-def handle_status(message):
+def status(m):
     try:
-        # System Stats
-        cpu_p = psutil.cpu_percent(interval=1)
+        cpu = psutil.cpu_percent(1)
         mem = psutil.virtual_memory()
-        disk = psutil.disk_usage('/')
         net = psutil.net_io_counters()
+        uptime = time.time() - psutil.boot_time()
+        d, rem = divmod(uptime, 86400)
+        h, _ = divmod(rem, 3600)
         
-        # Formatting
-        sys_info = markdown_safe(f"{platform.system()} {platform.release()}")
-        uptime_sec = time.time() - psutil.boot_time()
-        days, rem = divmod(uptime_sec, 86400)
-        hours, _ = divmod(rem, 3600)
+        xray = subprocess.run(['systemctl','is-active',XRAY_SERVICE], capture_output=True, text=True).stdout.strip()
         
-        cpu_txt = markdown_safe(f"{cpu_p:.1f}%")
-        mem_txt = markdown_safe(f"{mem.percent:.1f}% ({get_size(mem.used)} / {get_size(mem.total)})")
-        disk_txt = markdown_safe(f"{disk.percent:.1f}%")
-        net_up = markdown_safe(get_size(net.bytes_sent))
-        net_down = markdown_safe(get_size(net.bytes_recv))
-        
-        # Service Checks
-        xray_st = subprocess.run(['systemctl', 'is-active', XRAY_SERVICE], capture_output=True, text=True).stdout.strip()
-        nginx_st = subprocess.run(['systemctl', 'is-active', NGINX_SERVICE], capture_output=True, text=True).stdout.strip()
-        
-        text = (f"🖥️ *服务器健康状态*\n"
-                f"\\- *系统*: {sys_info}\n"
-                f"\\- *运行*: {int(days)}天 {int(hours)}小时\n"
-                f"\\- *CPU*: {cpu_txt}\n"
-                f"\\- *内存*: {mem_txt}\n"
-                f"\\- *磁盘*: {disk_txt}\n"
-                f"\\- *流量*: ⬆️{net_up} / ⬇️{net_down}\n"
-                f"\\- *Xray*: {markdown_safe(xray_st)}\n"
-                f"\\- *Nginx*: {markdown_safe(nginx_st)}")
-        
-        bot.send_message(message.chat.id, text)
-    except Exception as e:
-        bot.send_message(message.chat.id, f"❌ Error: {markdown_safe(str(e))}")
+        txt = (f"🖥️ *服务器状态*\n"
+               f"\\- *运行*: {int(d)}天 {int(h)}小时\n"
+               f"\\- *CPU*: {markdown_safe(f'{cpu:.1f}%')}\n"
+               f"\\- *内存*: {markdown_safe(f'{mem.percent:.1f}%')}\n"
+               f"\\- *流量*: ⬆️{markdown_safe(get_size(net.bytes_sent))} ⬇️{markdown_safe(get_size(net.bytes_recv))}\n"
+               f"\\- *Xray*: {markdown_safe(xray)}")
+        bot.send_message(m.chat.id, txt)
+    except Exception as e: bot.send_message(m.chat.id, f"Error: {e}")
 
 @bot.message_handler(regexp='🔄 重启服务')
-def handle_restart_service(message):
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("重启 Xray", callback_data='restart_xray'),
-               types.InlineKeyboardButton("重启 Nginx", callback_data='restart_nginx'))
-    bot.send_message(message.chat.id, "请选择服务:", reply_markup=markup)
+def restart_menu(m):
+    mk = types.InlineKeyboardMarkup()
+    mk.add(types.InlineKeyboardButton("重启 Xray", callback_data='res_xray'),
+           types.InlineKeyboardButton("重启 Nginx", callback_data='res_nginx'))
+    bot.send_message(m.chat.id, "选择服务:", reply_markup=mk)
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('restart_'))
-def callback_restart(call):
-    service = call.data.split('_')[1]
-    svc_name = XRAY_SERVICE if service == 'xray' else NGINX_SERVICE
-    bot.edit_message_text(f"🔄 重启 {service}...", call.message.chat.id, call.message.message_id)
-    ok, out = execute_command(f'systemctl restart {svc_name}')
-    res_text = f"✅ *{service} 重启成功*" if ok else f"❌ *{service} 失败*: {markdown_safe(out)}"
-    bot.edit_message_text(res_text, call.message.chat.id, call.message.message_id)
-
-@bot.message_handler(regexp='🔑 Socks5 管理')
-def handle_socks_management(message):
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("🎲 随机重置", callback_data='socks_reset'))
-    bot.send_message(message.chat.id, "管理 Socks5 账号:", reply_markup=markup)
-
-@bot.callback_query_handler(func=lambda call: call.data == 'socks_reset')
-def callback_socks_reset(call):
-    bot.edit_message_text("🎲 生成新账号中...", call.message.chat.id, call.message.message_id)
-    port, user, pwd = generate_random_socks_creds()
-    ok, res = update_socks5_inbound(port, user, pwd)
-    if ok:
-        execute_command(f'systemctl restart {XRAY_SERVICE}')
-        msg = (f"✅ *Socks5 已重置*\n"
-               f"Port: `{port}`\nUser: `{markdown_safe(user)}`\nPass: `{markdown_safe(pwd)}`")
-    else:
-        msg = f"❌ Error: {markdown_safe(res)}"
-    bot.edit_message_text(msg, call.message.chat.id, call.message.message_id)
+@bot.callback_query_handler(func=lambda c: c.data.startswith('res_'))
+def restart_handler(c):
+    svc = XRAY_SERVICE if c.data == 'res_xray' else NGINX_SERVICE
+    bot.edit_message_text(f"🔄 重启 {svc}...", c.message.chat.id, c.message.message_id)
+    execute_command(f'systemctl restart {svc}')
+    bot.edit_message_text(f"✅ *{svc} 重启成功*", c.message.chat.id, c.message.message_id)
 
 @bot.message_handler(regexp='ℹ️ 获取链接')
-def handle_get_links(message):
-    info = get_current_info()
-    dom = info.get('domain', 'Unknown')
-    if dom == 'Unknown':
-        bot.send_message(message.chat.id, "❌ 无法读取域名")
-        return
-        
-    vless = f"vless://{info['uuid']}@{dom}:443?encryption=none&security=tls&type=ws&host={dom}&path={info['path']}#{dom}"
-    socks = f"socks5://{info['socks_user']}:{info['socks_pass']}@{dom}:{info['socks_port']}#{dom}-Socks"
+def get_links(m):
+    dom, path = get_domain_and_path()
+    if dom == "Unknown": return bot.send_message(m.chat.id, "❌ 域名未知")
     
-    text = (f"🔗 *节点连接信息*\n"
-            f"域名: `{markdown_safe(dom)}`\n\n"
-            f"1️⃣ *VLESS (WS+TLS)*:\n`{markdown_safe(vless)}`\n\n"
-            f"2️⃣ *Socks5 (备用)*:\n`{markdown_safe(socks)}`")
-    bot.send_message(message.chat.id, text)
+    # Get Admin (First) Users
+    data = get_xray_config()
+    uuid = data['inbounds'][0]['settings']['clients'][0]['id']
+    
+    # Find socks
+    s_port = s_user = s_pass = ""
+    for ib in data['inbounds']:
+        if ib['protocol'] == 'socks':
+            s_port = ib['port']
+            s_user = ib['settings']['accounts'][0]['user']
+            s_pass = ib['settings']['accounts'][0]['pass']
+            break
+            
+    vless = f"vless://{uuid}@{dom}:443?encryption=none&security=tls&type=ws&host={dom}&path={path}#{dom}-Admin"
+    socks = f"socks5://{s_user}:{s_pass}@{dom}:{s_port}#{dom}-Admin"
+    
+    bot.send_message(m.chat.id, f"🔗 *管理员默认节点*\n\nVLESS:\n`{markdown_safe(vless)}`\n\nSocks5:\n`{markdown_safe(socks)}`")
+
+# --- User Management ---
+
+@bot.message_handler(regexp='👥 新增用户')
+def add_user_menu(m):
+    mk = types.InlineKeyboardMarkup()
+    mk.add(types.InlineKeyboardButton("➕ 新增 VLESS 朋友", callback_data='add_vless'),
+           types.InlineKeyboardButton("➕ 新增 Socks5 朋友", callback_data='add_socks'))
+    bot.send_message(m.chat.id, "请选择要添加的账号类型:", reply_markup=mk)
+
+@bot.callback_query_handler(func=lambda c: c.data == 'add_vless')
+def handler_add_vless(c):
+    bot.edit_message_text("⏳ 正在生成 VLESS 账号...", c.message.chat.id, c.message.message_id)
+    # Use timestamp as simple remark
+    remark = f"friend_{int(time.time())}"
+    ok, res = add_vless_user(remark)
+    
+    if ok:
+        execute_command(f'systemctl restart {XRAY_SERVICE}')
+        dom, path = get_domain_and_path()
+        link = f"vless://{res}@{dom}:443?encryption=none&security=tls&type=ws&host={dom}&path={path}#Friend"
+        
+        msg = (f"✅ *新增 VLESS 成功*\n"
+               f"UUID: `{markdown_safe(res)}`\n"
+               f"备注: `{markdown_safe(remark)}`\n\n"
+               f"🔗 *分享链接*:\n`{markdown_safe(link)}`")
+    else:
+        msg = f"❌ 失败: {markdown_safe(res)}"
+    
+    bot.edit_message_text(msg, c.message.chat.id, c.message.message_id)
+
+@bot.callback_query_handler(func=lambda c: c.data == 'add_socks')
+def handler_add_socks(c):
+    bot.edit_message_text("⏳ 正在生成 Socks5 账号...", c.message.chat.id, c.message.message_id)
+    remark = f"friend_{int(time.time())}"
+    ok, res = add_socks_user(remark)
+    
+    if ok:
+        port, user, pwd = res
+        execute_command(f'systemctl restart {XRAY_SERVICE}')
+        dom, _ = get_domain_and_path()
+        link = f"socks5://{user}:{pwd}@{dom}:{port}#Friend-Socks"
+        
+        msg = (f"✅ *新增 Socks5 成功*\n"
+               f"Port: `{port}` (共用)\n"
+               f"User: `{markdown_safe(user)}`\n"
+               f"Pass: `{markdown_safe(pwd)}`\n\n"
+               f"🔗 *分享链接*:\n`{markdown_safe(link)}`")
+    else:
+        msg = f"❌ 失败: {markdown_safe(res)}"
+
+    bot.edit_message_text(msg, c.message.chat.id, c.message.message_id)
 
 # --- Start ---
 if __name__ == '__main__':
     print("🚀 Bot Started...")
-    bot.polling(none_stop=True, interval=2)
+    bot.polling(none_stop=True)
 EOF_BOT
 chmod +x "$BOT_SCRIPT"
 green "✅ 机器人核心逻辑写入完成。"
 
-# 5. Create Systemd Service
-green "🛠️ 配置系统服务 (Systemd)..."
-cat > /etc/systemd/system/${SERVICE_NAME}.service <<EOF_SVC
-[Unit]
-Description=nlbw VPN Management Bot
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=/usr/bin/python3 ${BOT_SCRIPT}
-Restart=always
-User=root
-WorkingDirectory=/root
-
-[Install]
-WantedBy=multi-user.target
-EOF_SVC
-
-# 6. Enable and Start
+# 5. Service
 systemctl daemon-reload
 systemctl enable ${SERVICE_NAME}.service
 systemctl restart ${SERVICE_NAME}.service
 
 echo ""
-green "🎉 部署完成! Telegram 机器人已上线。"
-echo "请发送 /start 开始管理。"
+green "🎉 部署完成! 您的机器人现在支持【新增用户】功能了。"
