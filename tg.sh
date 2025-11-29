@@ -1,52 +1,56 @@
 #!/usr/bin/env bash
 #
-# tg.sh - Telegram Management Bot (Multi-User Edition)
-#
+# tg.sh - Telegram Server Management Bot (Ultimate V6 Edition)
+# Author: Hupan0210
 # Features:
-# 1. Monitor System Status & Traffic
-# 2. Manage Socks5 (Reset/Add)
-# 3. Manage VLESS (Add Users)
-# 4. Auto-fix Python env (PEP 668)
+#   - HTML Parse Mode (Stable, no Bad Request errors)
+#   - Full User Management (Add/Mod/Del/List for VLESS & Socks5)
+#   - QR Code Generation (via qrencode)
+#   - Multi-Admin Support
+#   - System Monitoring & Tools (Speedtest, Backup)
 #
 
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
-# Global Variables
+# --- Global Variables ---
 CONFIG_ENV="/etc/nlbwvpn/config.env"
 BOT_SCRIPT="/usr/local/bin/nlbw_bot.py"
 SERVICE_NAME="nlbw-bot"
 
-# Color helpers
+# --- Color Helpers ---
 green(){ echo -e "\033[1;32m$1\033[0m"; }
 red(){ echo -e "\033[1;31m$1\033[0m"; }
 yellow(){ echo -e "\033[1;33m$1\033[0m"; }
 
-# Check Root
+# --- Root Check ---
 if [[ $EUID -ne 0 ]]; then
     red "❌ Error: This script must be run as root."
     exit 1
 fi
 
-green "🚀 启动 Telegram 机器人部署 (多用户版)..."
+green "🚀 启动 Telegram 管理机器人部署 (V6 Ultimate)..."
 
-# 1. Credentials Input
+# --- 1. Credentials Input ---
+# Only ask if not previously configured or if forced
 while true; do
     read -r -p "请输入 Telegram Bot Token: " BOT_TOKEN
     if [[ -n "$BOT_TOKEN" ]]; then break; fi; red "Token 不能为空"
 done
 
 while true; do
-    read -r -p "请输入 Telegram Chat ID (Admin ID): " CHAT_ID
+    read -r -p "请输入 Telegram Chat ID (超级管理员): " CHAT_ID
     if [[ -n "$CHAT_ID" ]]; then break; fi; red "Chat ID 不能为空"
 done
 
-# 2. Save Configuration
+# --- 2. Save Configuration ---
 mkdir -p /etc/nlbwvpn
+# Clean old entries
 if [[ -f "$CONFIG_ENV" ]]; then
     sed -i "/^BOT_TOKEN=/d" "$CONFIG_ENV"
     sed -i "/^CHAT_ID=/d" "$CONFIG_ENV"
 fi
+# Write new config
 cat >> "$CONFIG_ENV" <<EOF
 BOT_TOKEN="${BOT_TOKEN}"
 CHAT_ID="${CHAT_ID}"
@@ -54,72 +58,76 @@ XRAY_CONF="/usr/local/etc/xray/config.json"
 NGINX_SERVICE="nginx"
 XRAY_SERVICE="xray"
 EOF
-green "✅ 凭证已保存。"
+green "✅ 凭证已更新至 $CONFIG_ENV"
 
-# 3. Install Dependencies
-green "📦 安装依赖..."
+# --- 3. Install System Dependencies ---
+green "📦 安装系统依赖 (qrencode, speedtest)..."
 apt-get update -y
-apt-get install -y python3 python3-pip jq
+apt-get install -y python3 python3-pip jq qrencode speedtest-cli
 
-green "⬇️ 安装 Python 库..."
-# Handle PEP 668 automatically
+# --- 4. Install Python Dependencies ---
+green "⬇️ 安装 Python 库 (pyTelegramBotAPI, psutil)..."
+# Logic to handle PEP 668 (Debian 12 / Ubuntu 24.04)
 if pip3 install pyTelegramBotAPI psutil --break-system-packages; then
-    green "✅ Python 依赖安装成功"
+    green "✅ Python 依赖安装成功 (with break-system-packages)"
 else
     yellow "⚠️ 尝试标准 pip 安装..."
     pip3 install pyTelegramBotAPI psutil
 fi
 
-# 4. Generate Python Bot Script
-green "🧠 写入机器人逻辑 (包含多用户功能)..."
+# --- 5. Generate Python Bot Script (V6 Code) ---
+green "🧠 写入 V6 机器人核心代码..."
 cat > "$BOT_SCRIPT" <<'EOF_BOT'
 # ==============================================================================
-# 🤖 nlbw_bot.py - Multi-User Edition
+# 🤖 nlbw_bot.py - V6 Final (HTML Mode + QR Codes + Full Management)
 # ==============================================================================
 import os
 import subprocess
 import json
-import random
-import string
 import platform
 import psutil
 import time
 import uuid
+import sys
+import html
 from telebot import TeleBot, types
 
 # --- Config ---
 CONFIG_ENV = "/etc/nlbwvpn/config.env"
+ADMIN_FILE = "/etc/nlbwvpn/admins.json"
+XRAY_CONF = "/usr/local/etc/xray/config.json"
+NGINX_SERVICE = "nginx"
+XRAY_SERVICE = "xray"
 
-def load_config():
-    config = {}
-    if not os.path.exists(CONFIG_ENV): return config
+config = {}
+if os.path.exists(CONFIG_ENV):
     with open(CONFIG_ENV, 'r') as f:
         for line in f:
-            line = line.strip()
-            if line and not line.startswith('#'):
-                parts = line.split('=', 1)
-                if len(parts) == 2: config[parts[0]] = parts[1].strip('"')
-    return config
+            if '=' in line and not line.startswith('#'):
+                k, v = line.strip().split('=', 1)
+                config[k] = v.strip('"')
 
-config = load_config()
 BOT_TOKEN = config.get("BOT_TOKEN")
-CHAT_ID = config.get("CHAT_ID")
-XRAY_CONF = config.get("XRAY_CONF", "/usr/local/etc/xray/config.json")
-XRAY_SERVICE = config.get("XRAY_SERVICE", "xray")
-NGINX_SERVICE = config.get("NGINX_SERVICE", "nginx")
+SUPER_ADMIN_ID = config.get("CHAT_ID")
 
-if not BOT_TOKEN or not CHAT_ID: exit(1)
-try: ALLOWED_CHAT_ID = int(CHAT_ID)
-except: exit(1)
+if not BOT_TOKEN or not SUPER_ADMIN_ID: sys.exit(1)
 
-bot = TeleBot(BOT_TOKEN, parse_mode='MarkdownV2')
+bot = TeleBot(BOT_TOKEN, parse_mode='HTML')
 
 # --- Helpers ---
-def markdown_safe(text):
-    if not isinstance(text, str): text = str(text)
-    for char in '_*[]()~`>#+-=|{}.!':
-        text = text.replace(char, f'\\{char}')
-    return text
+def get_admins():
+    if not os.path.exists(ADMIN_FILE):
+        admins = [int(SUPER_ADMIN_ID)]
+        save_admins(admins)
+        return admins
+    try:
+        with open(ADMIN_FILE, 'r') as f: return json.load(f)
+    except: return [int(SUPER_ADMIN_ID)]
+
+def save_admins(admin_list):
+    with open(ADMIN_FILE, 'w') as f: json.dump(admin_list, f)
+
+def is_admin(chat_id): return chat_id in get_admins()
 
 def get_size(bytes, suffix="B"):
     factor = 1024
@@ -153,178 +161,371 @@ def get_domain_and_path():
                 break
     return config.get("DOMAIN", "Unknown"), path
 
-# --- Add User Logic ---
-
-def add_vless_user(remarks):
-    data = get_xray_config()
-    if not data: return False, "Config missing"
-    
-    new_uuid = str(uuid.uuid4())
-    # Find VLESS inbound
-    for inbound in data.get('inbounds', []):
-        if inbound.get('protocol') == 'vless':
-            # Create user dict. Using email as remarks
-            new_client = {"id": new_uuid, "email": remarks, "level": 0}
-            inbound['settings']['clients'].append(new_client)
-            save_xray_config(data)
-            return True, new_uuid
-            
-    return False, "VLESS Inbound not found"
-
-def add_socks_user(remarks):
-    data = get_xray_config()
-    if not data: return False, "Config missing"
-    
-    new_user = 'u' + ''.join(random.choices(string.ascii_lowercase + string.digits, k=4))
-    new_pass = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
-    
-    # Find Socks inbound
-    for inbound in data.get('inbounds', []):
-        if inbound.get('protocol') == 'socks':
-            new_acc = {"user": new_user, "pass": new_pass}
-            # Append to accounts list
-            inbound['settings']['accounts'].append(new_acc)
-            # Retrieve port
-            port = inbound['port']
-            save_xray_config(data)
-            return True, (port, new_user, new_pass)
-            
-    return False, "Socks Inbound not found"
+def send_qr_code(chat_id, data, caption):
+    """Generates a QR code image and sends it via Telegram"""
+    try:
+        png_path = "/tmp/bot_qr.png"
+        # Generate QR using qrencode CLI installed on system
+        subprocess.run(['qrencode', '-o', png_path, '-s', '6', data], check=True)
+        with open(png_path, 'rb') as photo:
+            bot.send_photo(chat_id, photo, caption=caption)
+    except Exception as e:
+        bot.send_message(chat_id, f"❌ 二维码生成失败 (请确认已安装 qrencode): {e}")
 
 # --- Bot Handlers ---
 
-@bot.message_handler(func=lambda m: m.chat.id != ALLOWED_CHAT_ID, content_types=['text'])
-def unauthorized(m): bot.send_message(m.chat.id, "❌ Unauthorized")
+@bot.message_handler(func=lambda m: not is_admin(m.chat.id), content_types=['text'])
+def unauthorized(m): bot.send_message(m.chat.id, "❌ 无权访问")
 
 @bot.message_handler(commands=['start', 'menu'])
 def menu(m):
     mk = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-    mk.add(types.KeyboardButton('📊 状态'), types.KeyboardButton('👥 新增用户'),
-           types.KeyboardButton('🔄 重启服务'), types.KeyboardButton('ℹ️ 获取链接'))
-    bot.send_message(m.chat.id, "🚀 *面板已就绪*", reply_markup=mk)
+    mk.add(types.KeyboardButton('📊 状态'), types.KeyboardButton('👥 用户管理'),
+           types.KeyboardButton('👮 管理员'), types.KeyboardButton('🛠️ 实用工具'),
+           types.KeyboardButton('ℹ️ 获取所有链接'))
+    bot.send_message(m.chat.id, "🚀 <b>V6 终极面板 (全功能)</b>", reply_markup=mk)
 
+# --- 1. STATUS ---
 @bot.message_handler(regexp='📊 状态')
 def status(m):
     try:
+        sys_info = f"{platform.system()} {platform.release()}"
         cpu = psutil.cpu_percent(1)
         mem = psutil.virtual_memory()
+        disk = psutil.disk_usage('/')
         net = psutil.net_io_counters()
         uptime = time.time() - psutil.boot_time()
         d, rem = divmod(uptime, 86400)
         h, _ = divmod(rem, 3600)
         
-        xray = subprocess.run(['systemctl','is-active',XRAY_SERVICE], capture_output=True, text=True).stdout.strip()
+        xray_st = subprocess.run(['systemctl','is-active',XRAY_SERVICE], capture_output=True, text=True).stdout.strip()
+        nginx_st = subprocess.run(['systemctl','is-active',NGINX_SERVICE], capture_output=True, text=True).stdout.strip()
         
-        txt = (f"🖥️ *服务器状态*\n"
-               f"\\- *运行*: {int(d)}天 {int(h)}小时\n"
-               f"\\- *CPU*: {markdown_safe(f'{cpu:.1f}%')}\n"
-               f"\\- *内存*: {markdown_safe(f'{mem.percent:.1f}%')}\n"
-               f"\\- *流量*: ⬆️{markdown_safe(get_size(net.bytes_sent))} ⬇️{markdown_safe(get_size(net.bytes_recv))}\n"
-               f"\\- *Xray*: {markdown_safe(xray)}")
+        txt = (f"🖥️ <b>服务器健康状态</b>\n"
+               f"- <b>系统</b>: {html.escape(sys_info)}\n"
+               f"- <b>运行</b>: {int(d)}天 {int(h)}小时\n"
+               f"- <b>CPU</b>: {cpu:.1f}%\n"
+               f"- <b>内存</b>: {mem.percent:.1f}% ({get_size(mem.used)} / {get_size(mem.total)})\n"
+               f"- <b>磁盘</b>: {disk.percent:.1f}% ({get_size(disk.used)} / {get_size(disk.total)})\n"
+               f"- <b>流量</b>: ⬆️{get_size(net.bytes_sent)} ⬇️{get_size(net.bytes_recv)}\n"
+               f"- <b>Xray</b>: {xray_st}\n"
+               f"- <b>Nginx</b>: {nginx_st}")
         bot.send_message(m.chat.id, txt)
     except Exception as e: bot.send_message(m.chat.id, f"Error: {e}")
 
-@bot.message_handler(regexp='🔄 重启服务')
-def restart_menu(m):
+# --- 2. USER MGMT ---
+@bot.message_handler(regexp='👥 用户管理')
+def user_menu(m):
     mk = types.InlineKeyboardMarkup()
-    mk.add(types.InlineKeyboardButton("重启 Xray", callback_data='res_xray'),
-           types.InlineKeyboardButton("重启 Nginx", callback_data='res_nginx'))
-    bot.send_message(m.chat.id, "选择服务:", reply_markup=mk)
+    mk.add(types.InlineKeyboardButton("➕ 新增 VLESS", callback_data='add_vless'),
+           types.InlineKeyboardButton("➕ 新增 Socks5", callback_data='add_socks'))
+    mk.add(types.InlineKeyboardButton("📋 管理 VLESS (改/删/码)", callback_data='list_vless'),
+           types.InlineKeyboardButton("📋 管理 Socks5 (改/删/码)", callback_data='list_socks'))
+    bot.send_message(m.chat.id, "👥 <b>用户账号管理</b>", reply_markup=mk)
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith('res_'))
-def restart_handler(c):
-    svc = XRAY_SERVICE if c.data == 'res_xray' else NGINX_SERVICE
-    bot.edit_message_text(f"🔄 重启 {svc}...", c.message.chat.id, c.message.message_id)
-    execute_command(f'systemctl restart {svc}')
-    bot.edit_message_text(f"✅ *{svc} 重启成功*", c.message.chat.id, c.message.message_id)
+@bot.callback_query_handler(func=lambda c: True)
+def handle_all(c):
+    try:
+        if c.data.startswith('add_'): handle_add_user(c)
+        elif c.data.startswith('list_'): handle_list_user(c)
+        elif c.data.startswith('manage_'): handle_manage_user(c)
+        elif c.data.startswith('del_'): handle_del_user(c)
+        elif c.data.startswith('mod_'): handle_mod_user(c)
+        elif c.data.startswith('qr_'): handle_get_qr(c) # New QR Handler
+        elif c.data.startswith('adm_'): handle_admin(c)
+        elif c.data.startswith('tool_'): handle_tools(c)
+    except Exception as e:
+        bot.send_message(c.message.chat.id, f"❌ 错误: {str(e)}")
 
-@bot.message_handler(regexp='ℹ️ 获取链接')
-def get_links(m):
-    dom, path = get_domain_and_path()
-    if dom == "Unknown": return bot.send_message(m.chat.id, "❌ 域名未知")
-    
-    # Get Admin (First) Users
-    data = get_xray_config()
-    uuid = data['inbounds'][0]['settings']['clients'][0]['id']
-    
-    # Find socks
-    s_port = s_user = s_pass = ""
-    for ib in data['inbounds']:
-        if ib['protocol'] == 'socks':
-            s_port = ib['port']
-            s_user = ib['settings']['accounts'][0]['user']
-            s_pass = ib['settings']['accounts'][0]['pass']
-            break
-            
-    vless = f"vless://{uuid}@{dom}:443?encryption=none&security=tls&type=ws&host={dom}&path={path}#{dom}-Admin"
-    socks = f"socks5://{s_user}:{s_pass}@{dom}:{s_port}#{dom}-Admin"
-    
-    bot.send_message(m.chat.id, f"🔗 *管理员默认节点*\n\nVLESS:\n`{markdown_safe(vless)}`\n\nSocks5:\n`{markdown_safe(socks)}`")
+# ... Add Logic ...
+def handle_add_user(c):
+    if c.data == 'add_vless':
+        msg = bot.send_message(c.message.chat.id, "✍️ <b>请输入 VLESS 备注 (英文):</b>")
+        bot.register_next_step_handler(msg, add_vless_step)
+    elif c.data == 'add_socks':
+        msg = bot.send_message(c.message.chat.id, "✍️ <b>请输入: 用户名 密码</b> (空格分隔):")
+        bot.register_next_step_handler(msg, add_socks_step)
+    bot.answer_callback_query(c.id)
 
-# --- User Management ---
-
-@bot.message_handler(regexp='👥 新增用户')
-def add_user_menu(m):
-    mk = types.InlineKeyboardMarkup()
-    mk.add(types.InlineKeyboardButton("➕ 新增 VLESS 朋友", callback_data='add_vless'),
-           types.InlineKeyboardButton("➕ 新增 Socks5 朋友", callback_data='add_socks'))
-    bot.send_message(m.chat.id, "请选择要添加的账号类型:", reply_markup=mk)
-
-@bot.callback_query_handler(func=lambda c: c.data == 'add_vless')
-def handler_add_vless(c):
-    bot.edit_message_text("⏳ 正在生成 VLESS 账号...", c.message.chat.id, c.message.message_id)
-    # Use timestamp as simple remark
-    remark = f"friend_{int(time.time())}"
-    ok, res = add_vless_user(remark)
-    
-    if ok:
+def add_vless_step(m):
+    try:
+        remark = m.text.strip()
+        data = get_xray_config()
+        new_id = str(uuid.uuid4())
+        inb = next(i for i in data['inbounds'] if i['protocol']=='vless')
+        inb['settings']['clients'].append({"id": new_id, "email": remark, "level": 0})
+        save_xray_config(data)
         execute_command(f'systemctl restart {XRAY_SERVICE}')
         dom, path = get_domain_and_path()
-        link = f"vless://{res}@{dom}:443?encryption=none&security=tls&type=ws&host={dom}&path={path}#Friend"
-        
-        msg = (f"✅ *新增 VLESS 成功*\n"
-               f"UUID: `{markdown_safe(res)}`\n"
-               f"备注: `{markdown_safe(remark)}`\n\n"
-               f"🔗 *分享链接*:\n`{markdown_safe(link)}`")
-    else:
-        msg = f"❌ 失败: {markdown_safe(res)}"
-    
-    bot.edit_message_text(msg, c.message.chat.id, c.message.message_id)
+        link = f"vless://{new_id}@{dom}:443?encryption=none&security=tls&type=ws&host={dom}&path={path}#{remark}"
+        bot.send_message(m.chat.id, f"✅ <b>VLESS 添加成功</b>\n\n<code>{link}</code>")
+        # Auto send QR
+        send_qr_code(m.chat.id, link, f"QR: {remark}")
+    except Exception as e: bot.send_message(m.chat.id, f"❌ 失败: {e}")
 
-@bot.callback_query_handler(func=lambda c: c.data == 'add_socks')
-def handler_add_socks(c):
-    bot.edit_message_text("⏳ 正在生成 Socks5 账号...", c.message.chat.id, c.message.message_id)
-    remark = f"friend_{int(time.time())}"
-    ok, res = add_socks_user(remark)
-    
-    if ok:
-        port, user, pwd = res
+def add_socks_step(m):
+    try:
+        u, p = m.text.split()
+        data = get_xray_config()
+        inb = next(i for i in data['inbounds'] if i['protocol']=='socks')
+        inb['settings']['accounts'].append({"user": u, "pass": p})
+        port = inb['port']
+        save_xray_config(data)
         execute_command(f'systemctl restart {XRAY_SERVICE}')
         dom, _ = get_domain_and_path()
-        link = f"socks5://{user}:{pwd}@{dom}:{port}#Friend-Socks"
-        
-        msg = (f"✅ *新增 Socks5 成功*\n"
-               f"Port: `{port}` (共用)\n"
-               f"User: `{markdown_safe(user)}`\n"
-               f"Pass: `{markdown_safe(pwd)}`\n\n"
-               f"🔗 *分享链接*:\n`{markdown_safe(link)}`")
+        link = f"socks5://{u}:{p}@{dom}:{port}#{u}"
+        bot.send_message(m.chat.id, f"✅ <b>Socks5 添加成功</b>\n\n<code>{link}</code>")
+        send_qr_code(m.chat.id, link, f"QR: {u}")
+    except: bot.send_message(m.chat.id, "❌ 格式错误 (使用空格分隔)")
+
+# ... List & Manage ...
+def handle_list_user(c):
+    data = get_xray_config()
+    mk = types.InlineKeyboardMarkup()
+    if c.data == 'list_vless':
+        clients = next(i for i in data['inbounds'] if i['protocol']=='vless')['settings']['clients']
+        for cl in clients:
+            mk.add(types.InlineKeyboardButton(f"👤 {cl.get('email','User')}", callback_data=f"manage_vless_{cl['id']}"))
     else:
-        msg = f"❌ 失败: {markdown_safe(res)}"
+        accs = next(i for i in data['inbounds'] if i['protocol']=='socks')['settings']['accounts']
+        for ac in accs:
+            mk.add(types.InlineKeyboardButton(f"👤 {ac['user']}", callback_data=f"manage_socks_{ac['user']}"))
+    bot.edit_message_text("📋 <b>选择要管理的用户:</b>", c.message.chat.id, c.message.message_id, reply_markup=mk)
 
-    bot.edit_message_text(msg, c.message.chat.id, c.message.message_id)
+def handle_manage_user(c):
+    parts = c.data.split('_', 2)
+    mode = parts[1]; ident = parts[2]
+    
+    mk = types.InlineKeyboardMarkup()
+    if mode == 'vless':
+        mk.add(types.InlineKeyboardButton("✏️ 修改备注", callback_data=f"mod_vless_{ident}"))
+    else:
+        mk.add(types.InlineKeyboardButton("✏️ 修改密码", callback_data=f"mod_socks_{ident}"))
+    
+    # QR Code Button
+    mk.add(types.InlineKeyboardButton("📷 获取二维码 / 链接", callback_data=f"qr_{mode}_{ident}"))
+    mk.add(types.InlineKeyboardButton("❌ 删除用户", callback_data=f"del_{mode}_{ident}"))
+    mk.add(types.InlineKeyboardButton("🔙 返回", callback_data=f"list_{mode}"))
+    
+    bot.edit_message_text(f"⚙️ <b>管理用户:</b> <code>{ident}</code>", c.message.chat.id, c.message.message_id, reply_markup=mk)
 
-# --- Start ---
+# ... QR & Link Fetcher (Single User) ...
+def handle_get_qr(c):
+    parts = c.data.split('_', 2)
+    mode = parts[1]; ident = parts[2]
+    dom, path = get_domain_and_path()
+    data = get_xray_config()
+    
+    link = ""
+    caption = ""
+    
+    if mode == 'vless':
+        clients = next(i for i in data['inbounds'] if i['protocol']=='vless')['settings']['clients']
+        target = next((x for x in clients if x['id'] == ident), None)
+        if target:
+            link = f"vless://{ident}@{dom}:443?encryption=none&security=tls&type=ws&host={dom}&path={path}#{target['email']}"
+            caption = f"👤 <b>VLESS:</b> {target['email']}"
+            
+    else: # socks
+        accs = next(i for i in data['inbounds'] if i['protocol']=='socks')['settings']['accounts']
+        target = next((x for x in accs if x['user'] == ident), None)
+        if target:
+            inb = next(i for i in data['inbounds'] if i['protocol']=='socks')
+            link = f"socks5://{target['user']}:{target['pass']}@{dom}:{inb['port']}#{target['user']}"
+            caption = f"👤 <b>Socks5:</b> {target['user']}"
+            
+    if link:
+        bot.send_message(c.message.chat.id, f"{caption}\n<code>{link}</code>", parse_mode='HTML')
+        send_qr_code(c.message.chat.id, link, "📷 扫码导入")
+        bot.answer_callback_query(c.id)
+    else:
+        bot.answer_callback_query(c.id, "❌ 用户未找到")
+
+# ... Modify & Delete ...
+def handle_mod_user(c):
+    mode = c.data.split('_')[1]; ident = c.data.split('_', 2)[2]
+    if mode == 'vless':
+        msg = bot.send_message(c.message.chat.id, f"✍️ <b>请输入新备注:</b>")
+        bot.register_next_step_handler(msg, lambda m: do_mod_vless(m, ident))
+    else:
+        msg = bot.send_message(c.message.chat.id, f"✍️ <b>请输入新密码:</b>")
+        bot.register_next_step_handler(msg, lambda m: do_mod_socks(m, ident))
+    bot.answer_callback_query(c.id)
+
+def do_mod_vless(m, uuid_target):
+    try:
+        new_remark = m.text.strip()
+        data = get_xray_config()
+        clients = next(i for i in data['inbounds'] if i['protocol']=='vless')['settings']['clients']
+        for c in clients:
+            if c['id'] == uuid_target: c['email'] = new_remark
+        save_xray_config(data)
+        execute_command(f'systemctl restart {XRAY_SERVICE}')
+        bot.send_message(m.chat.id, f"✅ 备注更新: {new_remark}")
+    except: pass
+
+def do_mod_socks(m, user_target):
+    try:
+        new_pass = m.text.strip()
+        data = get_xray_config()
+        accs = next(i for i in data['inbounds'] if i['protocol']=='socks')['settings']['accounts']
+        for a in accs:
+            if a['user'] == user_target: a['pass'] = new_pass
+        save_xray_config(data)
+        execute_command(f'systemctl restart {XRAY_SERVICE}')
+        bot.send_message(m.chat.id, f"✅ 密码更新: {new_pass}")
+    except: pass
+
+def handle_del_user(c):
+    parts = c.data.split('_', 2); mode = parts[1]; tgt = parts[2]
+    data = get_xray_config()
+    changed = False
+    if mode == 'vless':
+        clients = next(i for i in data['inbounds'] if i['protocol']=='vless')['settings']['clients']
+        if len(clients) <= 1: return bot.answer_callback_query(c.id, "❌ 不能删除最后的主账号", show_alert=True)
+        new_c = [x for x in clients if x['id'] != tgt]
+        if len(new_c) < len(clients):
+            next(i for i in data['inbounds'] if i['protocol']=='vless')['settings']['clients'] = new_c
+            changed = True
+    else:
+        accs = next(i for i in data['inbounds'] if i['protocol']=='socks')['settings']['accounts']
+        if len(accs) <= 1: return bot.answer_callback_query(c.id, "❌ 不能删除最后的主账号", show_alert=True)
+        new_a = [x for x in accs if x['user'] != tgt]
+        if len(new_a) < len(accs):
+            next(i for i in data['inbounds'] if i['protocol']=='socks')['settings']['accounts'] = new_a
+            changed = True
+    if changed:
+        save_xray_config(data)
+        execute_command(f'systemctl restart {XRAY_SERVICE}')
+        bot.answer_callback_query(c.id, "✅ 已删除")
+        bot.edit_message_text(f"🗑️ <b>已删除:</b> {tgt}", c.message.chat.id, c.message.message_id)
+
+# --- 3. GET ALL LINKS (Updated) ---
+@bot.message_handler(regexp='ℹ️ 获取所有链接')
+def get_all_links(m):
+    try:
+        dom, path = get_domain_and_path()
+        data = get_xray_config()
+        
+        # VLESS Users
+        v_clients = next(i for i in data['inbounds'] if i['protocol']=='vless')['settings']['clients']
+        
+        # Socks Users
+        s_in = next(i for i in data['inbounds'] if i['protocol']=='socks')
+        s_accs = s_in['settings']['accounts']
+        s_port = s_in['port']
+        
+        msg = "🔗 <b>当前所有可用链接:</b>\n\n"
+        
+        msg += "🟢 <b>=== VLESS ===</b>\n"
+        admin_v_link = ""
+        for i, cl in enumerate(v_clients):
+            remark = cl.get('email', 'User')
+            if i == 0: remark += " (Admin)"
+            link = f"vless://{cl['id']}@{dom}:443?encryption=none&security=tls&type=ws&host={dom}&path={path}#{remark}"
+            if i == 0: admin_v_link = link
+            msg += f"👤 <b>{remark}</b>:\n<code>{link}</code>\n\n"
+            
+        msg += "🟡 <b>=== Socks5 ===</b>\n"
+        for i, ac in enumerate(s_accs):
+            u = ac['user']; p = ac['pass']
+            tag = " (Admin)" if i == 0 else ""
+            link = f"socks5://{u}:{p}@{dom}:{s_port}#{u}{tag}"
+            msg += f"👤 <b>{u}{tag}</b>:\n<code>{link}</code>\n\n"
+            
+        bot.send_message(m.chat.id, msg)
+        
+        # Send Admin QR as default convenience
+        if admin_v_link:
+            send_qr_code(m.chat.id, admin_v_link, "📷 主管理员 VLESS 二维码")
+            
+    except Exception as e: bot.send_message(m.chat.id, f"Error: {e}")
+
+# --- Admins & Tools ---
+@bot.message_handler(regexp='👮 管理员')
+def admin_menu(m):
+    mk = types.InlineKeyboardMarkup()
+    mk.add(types.InlineKeyboardButton("➕ 添加", callback_data='adm_add'),
+           types.InlineKeyboardButton("➖ 移除", callback_data='adm_del'),
+           types.InlineKeyboardButton("📜 列表", callback_data='adm_list'))
+    bot.send_message(m.chat.id, "👮 <b>管理员设置</b>", reply_markup=mk)
+
+def handle_admin(c):
+    act = c.data.split('_')[1]
+    if act == 'list':
+        admins = get_admins()
+        txt = "📜 <b>管理员:</b>\n" + "\n".join([f"<code>{u}</code>" for u in admins])
+        bot.edit_message_text(txt, c.message.chat.id, c.message.message_id)
+    elif act == 'add':
+        msg = bot.send_message(c.message.chat.id, "✍️ <b>输入新管理员 TG ID:</b>")
+        bot.register_next_step_handler(msg, lambda m: process_admin_op(m, 'add'))
+    elif act == 'del':
+        msg = bot.send_message(c.message.chat.id, "✍️ <b>输入要移除的 TG ID:</b>")
+        bot.register_next_step_handler(msg, lambda m: process_admin_op(m, 'del'))
+    bot.answer_callback_query(c.id)
+
+def process_admin_op(m, op):
+    try:
+        tid = int(m.text.strip())
+        admins = get_admins()
+        if op == 'add':
+            if tid not in admins: admins.append(tid)
+            msg = f"✅ 已添加"
+        else:
+            if str(tid) == str(SUPER_ADMIN_ID): msg = "❌ 不能移除超级管理员"
+            elif tid in admins: admins.remove(tid); msg = f"✅ 已移除"
+            else: msg = "⚠️ 未找到"
+        save_admins(admins)
+        bot.send_message(m.chat.id, msg)
+    except: pass
+
+@bot.message_handler(regexp='🛠️ 实用工具')
+def util_menu(m):
+    mk = types.InlineKeyboardMarkup()
+    mk.add(types.InlineKeyboardButton("⚡ Speedtest", callback_data='tool_speedtest'),
+           types.InlineKeyboardButton("☁️ 备份配置", callback_data='tool_backup'))
+    bot.send_message(m.chat.id, "🛠️ <b>工具箱</b>", reply_markup=mk)
+
+def handle_tools(c):
+    bot.answer_callback_query(c.id, "执行中...")
+    if 'speedtest' in c.data:
+        bot.send_message(c.message.chat.id, "⏳ 正在测速...")
+        ok, res = execute_command("speedtest-cli --simple")
+        bot.send_message(c.message.chat.id, f"⚡ <b>测速结果:</b>\n<pre>{res}</pre>")
+    elif 'backup' in c.data:
+        if os.path.exists(XRAY_CONF):
+            bot.send_document(c.message.chat.id, open(XRAY_CONF, 'rb'), caption="📜 Xray Config")
+
 if __name__ == '__main__':
-    print("🚀 Bot Started...")
+    print("🚀 Bot V6 Final Started...")
     bot.polling(none_stop=True)
 EOF_BOT
 chmod +x "$BOT_SCRIPT"
-green "✅ 机器人核心逻辑写入完成。"
+green "✅ 机器人核心代码已生成。"
 
-# 5. Service
+# --- 6. Create & Start Systemd Service ---
+green "🛠️ 配置系统服务 (Systemd)..."
+cat > /etc/systemd/system/${SERVICE_NAME}.service <<EOF_SVC
+[Unit]
+Description=nlbw VPN Management Bot
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 ${BOT_SCRIPT}
+Restart=always
+User=root
+WorkingDirectory=/root
+
+[Install]
+WantedBy=multi-user.target
+EOF_SVC
+
+# Enable and Start
 systemctl daemon-reload
 systemctl enable ${SERVICE_NAME}.service
 systemctl restart ${SERVICE_NAME}.service
 
 echo ""
-green "🎉 部署完成! 您的机器人现在支持【新增用户】功能了。"
+green "🎉 部署完成! 您的 V6 终极版机器人已上线。"
+echo "请在 Telegram 发送 /start 或 /menu 开始使用。"
